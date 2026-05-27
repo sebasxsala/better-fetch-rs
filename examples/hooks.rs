@@ -14,6 +14,7 @@ async fn main() -> Result<()> {
         tracing::debug!(url = %ctx.url, "outgoing request");
         Ok(ctx)
     });
+    // To abort from a hook: `return Err(Error::hook("blocked"));`
 
     let client = Client::builder()
         .base_url("https://jsonplaceholder.typicode.com")?

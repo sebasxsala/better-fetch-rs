@@ -246,7 +246,7 @@ async fn hook_error_propagates() -> Result<()> {
         .mount(&server)
         .await;
 
-    let hooks = Hooks::new().on_request(|_| async { Err(Error::Hook("blocked".into())) });
+    let hooks = Hooks::new().on_request(|_| async { Err(Error::hook("blocked")) });
 
     let client = Client::builder()
         .base_url(server.uri())?
