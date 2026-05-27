@@ -1,3 +1,10 @@
+//! Lifecycle hooks for requests and responses.
+//!
+//! [`Hooks::on_request`] and [`Hooks::on_response`] return [`Result`]. To abort the client
+//! pipeline intentionally, return `Err(Error::hook("reason"))`. Other [`Error`] variants
+//! (`Transport`, `Http`, …) are valid when a hook needs to surface a specific failure.
+//! [`Hooks::on_success`], [`Hooks::on_error`], and [`Hooks::on_retry`] cannot return errors.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -79,6 +86,7 @@ impl Hooks {
         Self::default()
     }
 
+    /// Runs before the transport call. Return `Err(Error::hook("…"))` to cancel the request.
     pub fn on_request<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
@@ -88,6 +96,7 @@ impl Hooks {
         self
     }
 
+    /// Runs after the transport returns. Return `Err(Error::hook("…"))` to fail the request.
     pub fn on_response<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(ResponseContext) -> Fut + Send + Sync + 'static,

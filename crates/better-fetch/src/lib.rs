@@ -3,40 +3,12 @@
 //! Typed HTTP client layer on top of [reqwest](https://docs.rs/reqwest), inspired by
 //! [@better-fetch/fetch](https://better-fetch.vercel.app/docs). This crate is not affiliated
 //! with the upstream TypeScript project.
-//!
-//! ## Quick start
-//!
-//! ```no_run
-//! use better_fetch::{Client, Result};
-//! use serde::Deserialize;
-//!
-//! #[derive(Debug, Deserialize)]
-//! struct Todo {
-//!     user_id: u64,
-//!     id: u64,
-//!     title: String,
-//!     completed: bool,
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
-//!     let client = Client::new("https://jsonplaceholder.typicode.com")?;
-//!     let todo: Todo = client
-//!         .get("/todos/:id")
-//!         .param("id", 1)
-//!         .send()
-//!         .await?
-//!         .json()
-//!         .await?;
-//!     println!("{todo:#?}");
-//!     Ok(())
-//! }
-//! ```
 
 mod url_build;
 
 pub mod auth;
 pub mod backend;
+pub mod cancel;
 pub mod client;
 pub mod endpoint;
 pub mod error;
@@ -62,9 +34,12 @@ pub mod openapi;
 pub mod tower;
 
 pub use auth::{AsyncTokenProvider, Auth, TokenSource};
-pub use backend::{HttpBackend, HttpRequest, HttpResponse, ReqwestBackend};
+pub use backend::{HttpBackend, HttpBody, HttpRequest, HttpResponse, ReqwestBackend};
+pub use cancel::CancellationToken;
+#[cfg(feature = "multipart")]
+pub use reqwest::multipart;
 pub use client::{Client, ClientBuilder, ClientConfig};
-pub use endpoint::Endpoint;
+pub use endpoint::{Endpoint, EndpointParams, EndpointQuery, EndpointRequestBuilder};
 pub use error::Error;
 pub use hooks::{ErrorContext, Hooks, RequestContext, ResponseContext, SuccessContext};
 #[cfg(feature = "json")]
@@ -73,7 +48,8 @@ pub use plugin::{Plugin, PluginRegistry, PreparedRequest};
 pub use plugins::LoggerPlugin;
 pub use request::RequestBuilder;
 pub use response::Response;
-pub use retry::{default_should_retry, RetryPolicy, ShouldRetryFn};
+pub use retry::{default_should_retry, parse_retry_after, RetryPolicy, ShouldRetryFn};
+pub use url_build::QueryValue;
 
 #[cfg(feature = "schema")]
 pub use schema::{EndpointSchema, SchemaRegistry};

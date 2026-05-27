@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
 
 use crate::response::Response;
 
@@ -15,23 +15,31 @@ pub type ShouldRetryFn = Arc<dyn Fn(&Response) -> bool + Send + Sync>;
 #[derive(Clone)]
 pub enum RetryPolicy {
     /// Shorthand for linear retry with `attempts` retries and a 1 second delay between attempts.
-    Count(u32),
+    Count {
+        attempts: u32,
+        should_retry: Option<ShouldRetryFn>,
+    },
     Linear {
         attempts: u32,
         delay: Duration,
         should_retry: Option<ShouldRetryFn>,
+        jitter: bool,
     },
     Exponential {
         attempts: u32,
         base_delay: Duration,
         max_delay: Duration,
         should_retry: Option<ShouldRetryFn>,
+        jitter: bool,
     },
 }
 
 impl RetryPolicy {
     pub fn count(attempts: u32) -> Self {
-        Self::Count(attempts)
+        Self::Count {
+            attempts,
+            should_retry: None,
+        }
     }
 
     pub fn linear(attempts: u32, delay: Duration) -> Self {
@@ -39,6 +47,7 @@ impl RetryPolicy {
             attempts,
             delay,
             should_retry: None,
+            jitter: false,
         }
     }
 
@@ -48,50 +57,63 @@ impl RetryPolicy {
             base_delay,
             max_delay,
             should_retry: None,
+            jitter: true,
         }
+    }
+
+    /// Enables randomized backoff jitter on linear or exponential policies.
+    pub fn with_jitter(mut self, jitter: bool) -> Self {
+        match &mut self {
+            Self::Linear { jitter: j, .. } | Self::Exponential { jitter: j, .. } => *j = jitter,
+            Self::Count { .. } => {}
+        }
+        self
     }
 
     pub fn with_should_retry(self, f: ShouldRetryFn) -> Self {
         match self {
-            Self::Count(attempts) => Self::Linear {
+            Self::Count { attempts, .. } => Self::Count {
                 attempts,
-                delay: Duration::from_secs(1),
                 should_retry: Some(f),
             },
             Self::Linear {
                 attempts,
                 delay,
-                should_retry: _,
+                jitter,
+                ..
             } => Self::Linear {
                 attempts,
                 delay,
                 should_retry: Some(f),
+                jitter,
             },
             Self::Exponential {
                 attempts,
                 base_delay,
                 max_delay,
-                should_retry: _,
+                jitter,
+                ..
             } => Self::Exponential {
                 attempts,
                 base_delay,
                 max_delay,
                 should_retry: Some(f),
+                jitter,
             },
         }
     }
 
     pub(crate) fn max_attempts(&self) -> u32 {
         match self {
-            Self::Count(n)
-            | Self::Linear { attempts: n, .. }
-            | Self::Exponential { attempts: n, .. } => *n,
+            Self::Count { attempts, .. }
+            | Self::Linear { attempts, .. }
+            | Self::Exponential { attempts, .. } => *attempts,
         }
     }
 
     pub(crate) fn delay_before_attempt(&self, attempt: u32) -> Duration {
         match self {
-            Self::Count(_) => Duration::from_secs(1),
+            Self::Count { .. } => Duration::from_secs(1),
             Self::Linear { delay, .. } => *delay,
             Self::Exponential {
                 base_delay,
@@ -101,6 +123,24 @@ impl RetryPolicy {
                 let exp = base_delay.saturating_mul(2u32.saturating_pow(attempt));
                 exp.min(*max_delay)
             }
+        }
+    }
+
+    /// Computes sleep duration using policy backoff, optional [`Retry-After`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After), and jitter.
+    pub(crate) fn delay_after_response(&self, attempt: u32, headers: &HeaderMap) -> Duration {
+        let base = self.delay_before_attempt(attempt);
+        let delay = parse_retry_after(headers).unwrap_or(base);
+        if self.uses_jitter() {
+            apply_jitter(delay)
+        } else {
+            delay
+        }
+    }
+
+    pub(crate) fn uses_jitter(&self) -> bool {
+        match self {
+            Self::Count { .. } => true,
+            Self::Linear { jitter, .. } | Self::Exponential { jitter, .. } => *jitter,
         }
     }
 
@@ -114,10 +154,9 @@ impl RetryPolicy {
         }
 
         let custom = match self {
-            Self::Linear { should_retry, .. } | Self::Exponential { should_retry, .. } => {
-                should_retry.as_ref()
-            }
-            Self::Count(_) => None,
+            Self::Count { should_retry, .. }
+            | Self::Linear { should_retry, .. }
+            | Self::Exponential { should_retry, .. } => should_retry.as_ref(),
         };
 
         if let Some(f) = custom {
@@ -129,12 +168,27 @@ impl RetryPolicy {
 }
 
 pub fn default_should_retry(status: StatusCode) -> bool {
-    matches!(status.as_u16(), 429 | 502 | 503 | 504)
+    matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
 }
 
-pub(crate) async fn sleep_before_retry(delay: Duration) {
-    tokio::time::sleep(delay).await;
+/// Parses `Retry-After` as a delay in seconds (integer values only).
+pub fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
+    let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
+    let secs = value.trim().parse::<u64>().ok()?;
+    Some(Duration::from_secs(secs))
 }
+
+fn apply_jitter(delay: Duration) -> Duration {
+    let nanos = delay.as_nanos().min(u128::from(u64::MAX)) as u64;
+    if nanos == 0 {
+        return delay;
+    }
+    let half = nanos / 2;
+    let span = nanos.saturating_sub(half).max(1);
+    Duration::from_nanos(half + fastrand::u64(..span))
+}
+
+pub(crate) use crate::cancel::sleep_or_cancel;
 
 #[cfg(test)]
 mod tests {
@@ -155,6 +209,7 @@ mod tests {
 
     #[test]
     fn default_should_retry_codes() {
+        assert!(default_should_retry(StatusCode::REQUEST_TIMEOUT));
         assert!(default_should_retry(StatusCode::TOO_MANY_REQUESTS));
         assert!(default_should_retry(StatusCode::SERVICE_UNAVAILABLE));
         assert!(!default_should_retry(StatusCode::NOT_FOUND));
@@ -163,6 +218,15 @@ mod tests {
     #[test]
     fn count_policy_max_attempts() {
         assert_eq!(RetryPolicy::count(3).max_attempts(), 3);
+    }
+
+    #[test]
+    fn count_with_should_retry_stays_count() {
+        let policy = RetryPolicy::count(2)
+            .with_should_retry(Arc::new(|r| r.status() == StatusCode::NOT_FOUND));
+        assert!(matches!(policy, RetryPolicy::Count { .. }));
+        assert!(policy.should_retry_response(&response_with_status(404), false));
+        assert!(!policy.should_retry_response(&response_with_status(503), false));
     }
 
     #[test]
@@ -185,5 +249,51 @@ mod tests {
             .with_should_retry(Arc::new(|r| r.status() == StatusCode::NOT_FOUND));
         assert!(policy.should_retry_response(&response_with_status(404), false));
         assert!(!policy.should_retry_response(&response_with_status(503), false));
+    }
+
+    #[test]
+    fn parse_retry_after_seconds() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "3".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn delay_after_response_uses_retry_after() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "2".parse().unwrap());
+        let policy = RetryPolicy::linear(1, Duration::from_millis(100)).with_jitter(false);
+        assert_eq!(
+            policy.delay_after_response(0, &headers),
+            Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn jitter_stays_within_bounds() {
+        let base = Duration::from_secs(4);
+        for _ in 0..20 {
+            let jittered = apply_jitter(base);
+            assert!(jittered >= Duration::from_secs(2));
+            assert!(jittered <= base);
+        }
+    }
+
+    #[test]
+    fn parse_retry_after_invalid_is_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "not-a-number".parse().unwrap());
+        assert!(parse_retry_after(&headers).is_none());
+    }
+
+    #[test]
+    fn exponential_uses_jitter_by_default() {
+        let policy = RetryPolicy::exponential(3, Duration::from_secs(1), Duration::from_secs(8));
+        assert!(policy.uses_jitter());
+    }
+
+    #[test]
+    fn linear_jitter_disabled_by_default() {
+        assert!(!RetryPolicy::linear(1, Duration::from_secs(1)).uses_jitter());
     }
 }

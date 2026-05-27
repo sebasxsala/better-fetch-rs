@@ -39,9 +39,18 @@ pub enum Error {
     #[error("request timed out")]
     Timeout,
 
+    #[error("request was cancelled")]
+    Cancelled,
+
+    #[error("client base URL is required; call ClientBuilder::base_url")]
+    MissingBaseUrl,
+
     #[error("retries exhausted after {attempts} attempts")]
     RetryExhausted { attempts: u32, last: Option<String> },
 
+    /// Returned from [`on_request`](crate::hooks::Hooks::on_request) or
+    /// [`on_response`](crate::hooks::Hooks::on_response) to abort the pipeline.
+    /// Prefer constructing this with [`Error::hook`](Self::hook) rather than [`Error::Other`](Self::Other).
     #[error("hook error: {0}")]
     Hook(String),
 
@@ -105,6 +114,22 @@ impl Error {
     /// Returns `true` when transport retries were configured but all attempts failed.
     pub fn is_retry_exhausted(&self) -> bool {
         matches!(self, Self::RetryExhausted { .. })
+    }
+
+    /// Returns `true` when the request was cancelled via [`CancellationToken`](crate::CancellationToken).
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+
+    /// Builds a hook failure for [`Hooks::on_request`](crate::hooks::Hooks::on_request) /
+    /// [`Hooks::on_response`](crate::hooks::Hooks::on_response).
+    pub fn hook(msg: impl Into<String>) -> Self {
+        Self::Hook(msg.into())
+    }
+
+    /// Returns `true` when the error is [`Error::Hook`](Self::Hook).
+    pub fn is_hook(&self) -> bool {
+        matches!(self, Self::Hook(_))
     }
 
     pub(crate) fn retry_exhausted(attempts: u32, last: Error) -> Self {
@@ -176,6 +201,13 @@ mod tests {
     fn api_json_returns_none_without_body() {
         let err = Error::http(StatusCode::INTERNAL_SERVER_ERROR, "err", None);
         assert!(err.api_json::<ApiError>().is_none());
+    }
+
+    #[test]
+    fn hook_constructor_and_is_hook() {
+        let err = Error::hook("blocked");
+        assert!(err.is_hook());
+        assert!(matches!(err, Error::Hook(msg) if msg == "blocked"));
     }
 
     #[test]

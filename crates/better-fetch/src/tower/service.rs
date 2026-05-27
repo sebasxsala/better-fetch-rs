@@ -57,10 +57,23 @@ impl Service<HttpRequest> for ReqwestHttpService {
 
 /// Wraps a Tower [`Service`] as an [`HttpBackend`].
 ///
-/// Requests are serialized through a [`tokio::sync::Mutex`] because Tower services
-/// require `&mut self` for [`Service::call`](tower::Service::call). For high concurrency,
-/// prefer [`tower::buffer::Buffer`](https://docs.rs/tower/latest/tower/buffer/struct.Buffer.html)
-/// inside the transport stack.
+/// Every call through [`HttpBackend::execute`](crate::backend::HttpBackend::execute) acquires
+/// a [`tokio::sync::Mutex`] on the inner service for the full `ready` + `call` sequence,
+/// because Tower services require `&mut self` for [`Service::call`](tower::Service::call).
+/// Concurrent client requests therefore take turns at this lock when using
+/// [`ClientBuilder::http_service`](crate::client::ClientBuilder::http_service),
+/// [`http_service_boxed`](crate::client::ClientBuilder::http_service_boxed), or
+/// [`transport_stack`](crate::client::ClientBuilder::transport_stack).
+///
+/// **Production transport stacks:** wrap your inner service with
+/// [`tower::buffer::Buffer`](https://docs.rs/tower/latest/tower/buffer/struct.Buffer.html)
+/// *before* passing the stack to the client (`Buffer::new` spawns its worker on Tokio)
+/// (see `examples/tower_stack`). That is the recommended pattern for layered Tower
+/// services; the outer mutex here remains a bottleneck until a future release may
+/// replace it with an internal buffer.
+///
+/// When you do not need Tower middleware, prefer the default reqwest
+/// [`HttpBackend`](crate::backend::HttpBackend) (no transport mutex).
 pub struct ServiceBackend {
     inner: Arc<Mutex<BoxHttpService>>,
 }
@@ -103,6 +116,6 @@ impl HttpBackend for ServiceBackend {
             .ready()
             .await
             .map_err(|e| Error::Transport(format!("service not ready: {e}")))?;
-        service.call(request).await
+        service.call(request.clone()).await
     }
 }

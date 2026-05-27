@@ -12,33 +12,37 @@ readme = "../../README.md"
 [features]
 default = ["reqwest", "json", "rustls-tls"]
 reqwest = ["dep:reqwest"]
-json = ["dep:serde", "dep:serde_json"]
+json = ["dep:serde", "dep:serde_json", "reqwest/json"]
 rustls-tls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
 blocking = ["reqwest/blocking"]
-multipart = ["reqwest/multipart"]
+## `RequestBuilder::multipart` (reqwest multipart body).
+multipart = ["dep:reqwest", "reqwest/multipart"]
 cookies = ["reqwest/cookies"]
 schema = ["dep:schemars", "dep:serde", "json"]
-openapi = ["schema", "dep:indexmap", "dep:serde", "json"]
+openapi = ["schema", "dep:serde", "json"]
 tower = ["dep:tower", "dep:futures-util"]
 tower-http = ["tower", "dep:tower-http"]
 macros = ["dep:better-fetch-macros"]
 validate = ["json", "dep:garde"]
 
 [dependencies]
-tokio = { version = "1", features = ["time", "sync"] }
+tokio = { version = "1", features = ["time", "sync", "macros"] }
+tokio-util = { workspace = true }
+fastrand = { workspace = true }
+indexmap = { workspace = true }
 base64 = "0.22"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+percent-encoding = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["json", "multipart", "rustls-tls"] }
 schemars = { workspace = true, optional = true }
-indexmap = { workspace = true, optional = true }
 tower = { workspace = true, optional = true, features = ["util", "limit", "timeout", "buffer"] }
 futures-util = { version = "0.3", optional = true }
 tower-http = { version = "0.6", optional = true, default-features = false, features = ["tower", "trace"] }
@@ -60,6 +64,15 @@ proptest = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "cancel_tests"
+path = "../../tests/cancel_tests.rs"
+
+[[test]]
+name = "throw_tests"
+path = "../../tests/throw_tests.rs"
+required-features = ["json"]
 
 [[test]]
 name = "client_tests"
@@ -110,6 +123,36 @@ name = "schema_tests"
 path = "../../tests/schema_tests.rs"
 required-features = ["schema"]
 
+[[test]]
+name = "form_tests"
+path = "../../tests/form_tests.rs"
+
+[[test]]
+name = "builder_tests"
+path = "../../tests/builder_tests.rs"
+
+[[test]]
+name = "query_order_tests"
+path = "../../tests/query_order_tests.rs"
+
+[[test]]
+name = "retry_edge_tests"
+path = "../../tests/retry_edge_tests.rs"
+
+[[test]]
+name = "endpoint_typed_tests"
+path = "../../tests/endpoint_typed_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "plugin_init_tests"
+path = "../../tests/plugin_init_tests.rs"
+
+[[test]]
+name = "multipart_tests"
+path = "../../tests/multipart_tests.rs"
+required-features = ["multipart"]
+
 [[example]]
 name = "basic"
 path = "../../examples/basic.rs"
@@ -149,6 +192,11 @@ required-features = ["validate"]
 name = "tower_stack"
 path = "../../examples/tower_stack.rs"
 required-features = ["tower", "json"]
+
+[[example]]
+name = "multipart"
+path = "../../examples/multipart.rs"
+required-features = ["multipart"]
 
 [[example]]
 name = "openapi_export"

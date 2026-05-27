@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use indexmap::IndexMap;
 use tokio::sync::Semaphore;
 
 use http::Method;
@@ -9,23 +10,33 @@ use reqwest::Client as ReqwestClient;
 use url::Url;
 
 use crate::auth::Auth;
-use crate::backend::{HttpBackend, HttpRequest, ReqwestBackend};
-#[cfg(feature = "tower")]
-use crate::backend::HttpResponse;
+use crate::backend::{HttpBackend, HttpBody, HttpRequest, ReqwestBackend};
+use crate::cancel::execute_or_cancel;
+use crate::endpoint::{Endpoint, EndpointRequestBuilder};
 use crate::error::Error;
 use crate::hooks::{ErrorContext, Hooks, RequestContext, ResponseContext, SuccessContext};
 use crate::plugin::{PluginRegistry, PreparedRequest};
 use crate::request::RequestBuilder;
 use crate::response::Response;
-use crate::retry::{sleep_before_retry, RetryPolicy};
+use crate::retry::{sleep_or_cancel, RetryPolicy};
 use crate::url_build::build_url;
 use crate::Result;
+
+#[cfg(feature = "tower")]
+use crate::backend::HttpResponse;
 
 #[cfg(feature = "json")]
 use crate::json_parser::JsonParserFn;
 
 #[cfg(feature = "schema")]
 use crate::schema::SchemaRegistry;
+
+fn body_for_context(body: &HttpBody) -> Option<bytes::Bytes> {
+    match body {
+        HttpBody::Empty => None,
+        HttpBody::Bytes(b) => Some(b.clone()),
+    }
+}
 
 /// Shared client configuration.
 #[derive(Clone)]
@@ -36,8 +47,13 @@ pub struct ClientConfig {
     pub auth: Option<Auth>,
     pub default_headers: http::HeaderMap,
     pub hooks: Hooks,
+    pub(crate) merged_hooks: Hooks,
     pub plugins: Arc<PluginRegistry>,
-    /// Limits concurrent in-flight requests for this client (core transport guard, no Tower dep).
+    /// Limits concurrent in-flight requests for this client (including retries).
+    ///
+    /// This is separate from Tower's [`ConcurrencyLimitLayer`](crate::tower::stack::ConcurrencyLimitLayer):
+    /// the client semaphore applies to the full request lifecycle (hooks + retries), while Tower
+    /// limits only transport-layer concurrency. Avoid stacking both without accounting for that.
     pub max_in_flight: Option<Arc<Semaphore>>,
     #[cfg(feature = "schema")]
     pub schema_registry: Option<Arc<SchemaRegistry>>,
@@ -61,8 +77,17 @@ impl Client {
         ClientBuilder::new()
     }
 
-    pub fn with_http_client(reqwest_client: ReqwestClient) -> Result<Self> {
-        ClientBuilder::new().reqwest_client(reqwest_client).build()
+    /// Builds a client with a custom reqwest instance. [`ClientBuilder::base_url`] is required.
+    pub fn with_http_client(reqwest_client: ReqwestClient, base_url: impl AsRef<str>) -> Result<Self> {
+        ClientBuilder::new()
+            .reqwest_client(reqwest_client)
+            .base_url(base_url)?
+            .build()
+    }
+
+    /// Start a typed request for [`Endpoint`] `E`.
+    pub fn call<E: Endpoint>(&self) -> EndpointRequestBuilder<'_, E> {
+        EndpointRequestBuilder::new(self.request(E::METHOD, E::PATH))
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -99,12 +124,16 @@ impl Client {
             method,
             path: path.into(),
             params: HashMap::new(),
-            query: HashMap::new(),
+            query: IndexMap::new(),
             headers: self.config.default_headers.clone(),
-            body: None,
+            body: HttpBody::Empty,
+            #[cfg(feature = "multipart")]
+            multipart: None,
             timeout: self.config.timeout,
             retry: self.config.retry.clone(),
             auth: self.config.auth.clone(),
+            cancellation: None,
+            throw_on_error: false,
             #[cfg(feature = "json")]
             json_parser: None,
             #[cfg(feature = "validate")]
@@ -118,6 +147,7 @@ impl Client {
             .json_parser
             .clone()
             .or_else(|| self.config.json_parser.clone());
+
         let built = build_url(
             &self.config.base_url,
             &builder.path,
@@ -136,34 +166,32 @@ impl Client {
         }
 
         let mut url = built.url;
-
-        let mut prepared = PreparedRequest {
-            url: url.clone(),
-            path: builder.path.clone(),
-        };
-        self.config.plugins.run_init_all(&mut prepared).await?;
-        url = prepared.url;
-
         let mut headers = builder.headers;
         let auth = builder.auth.or_else(|| self.config.auth.clone());
         if let Some(auth) = auth {
             auth.apply(&mut headers).await?;
         }
 
+        let mut prepared = PreparedRequest {
+            url: url.clone(),
+            path: builder.path.clone(),
+            method: method.clone(),
+            headers: headers.clone(),
+        };
+        self.config.plugins.run_init_all(&mut prepared).await?;
+        url = prepared.url;
+        headers = prepared.headers;
+        method = prepared.method;
+
         let mut req_ctx = RequestContext {
             url: url.clone(),
             method: method.clone(),
             headers: headers.clone(),
-            body: builder.body.clone(),
+            body: body_for_context(&builder.body),
             retry_attempt: 0,
         };
 
-        let merged_hooks = self
-            .config
-            .hooks
-            .clone()
-            .merge(self.config.plugins.merged_hooks());
-
+        let merged_hooks = &self.config.merged_hooks;
         req_ctx = merged_hooks.run_on_request(req_ctx).await?;
         url = req_ctx.url.clone();
         headers = req_ctx.headers.clone();
@@ -171,9 +199,10 @@ impl Client {
 
         let timeout = builder.timeout;
         let retry_policy = builder.retry.or_else(|| self.config.retry.clone());
+        let throw_on_error = builder.throw_on_error;
+        let cancel = builder.cancellation;
 
         let backend = self.backend.clone();
-        let body = req_ctx.body.clone();
 
         let _in_flight_permit = match &self.config.max_in_flight {
             Some(sem) => Some(
@@ -187,26 +216,45 @@ impl Client {
         let mut attempt = 0u32;
         let max_attempts = retry_policy.as_ref().map(|p| p.max_attempts()).unwrap_or(0);
 
-        let http_req = HttpRequest {
-            method,
-            url,
-            headers,
-            body,
-            timeout,
-        };
+        let request_body = builder.body;
+        #[cfg(feature = "multipart")]
+        let mut multipart_body = builder.multipart;
+        #[cfg(feature = "multipart")]
+        let had_multipart = multipart_body.is_some();
+
+        let cancel_ref = cancel.as_ref();
 
         loop {
             req_ctx.retry_attempt = attempt;
 
-            let result = backend.execute(http_req.clone()).await;
+            #[cfg(feature = "multipart")]
+            if attempt > 0 && had_multipart {
+                return Err(Error::Other(
+                    "automatic retry is not supported with multipart request bodies".into(),
+                ));
+            }
+
+            let http_req = HttpRequest {
+                method: method.clone(),
+                url: url.clone(),
+                headers: headers.clone(),
+                body: request_body.clone(),
+                timeout,
+                cancellation: cancel.clone(),
+                #[cfg(feature = "multipart")]
+                multipart: multipart_body.take(),
+            };
+            let request_url = http_req.url.clone();
+
+            let result = execute_or_cancel(cancel_ref, backend.execute(http_req)).await;
 
             match result {
                 Ok(http_res) => {
                     let response = Response::new(
                         http_res.status,
-                        http_res.headers,
+                        http_res.headers.clone(),
                         http_res.body,
-                        Some(http_req.url.clone()),
+                        Some(request_url.clone()),
                         #[cfg(feature = "json")]
                         json_parser.clone(),
                     );
@@ -232,10 +280,10 @@ impl Client {
                             .await;
                         let delay = retry_policy
                             .as_ref()
-                            .map(|p| p.delay_before_attempt(attempt))
+                            .map(|p| p.delay_after_response(attempt, response.headers()))
                             .unwrap_or(Duration::from_secs(1));
                         attempt += 1;
-                        sleep_before_retry(delay).await;
+                        sleep_or_cancel(delay, cancel_ref).await?;
                         continue;
                     }
 
@@ -246,25 +294,41 @@ impl Client {
                                 response: response.clone(),
                             })
                             .await;
-                    } else {
-                        let status = response.status();
-                        merged_hooks
-                            .run_on_error(ErrorContext {
-                                request: req_ctx.clone(),
-                                response: Some(response.clone()),
-                                error: Error::http_with_status_text(
-                                    status,
-                                    status.canonical_reason().unwrap_or("request failed"),
-                                    status.canonical_reason().unwrap_or("request failed"),
-                                    Some(response.bytes().clone()),
-                                ),
-                            })
-                            .await;
+                        return Ok(response);
                     }
 
+                    let status = response.status();
+                    let http_err = Error::http_with_status_text(
+                        status,
+                        status.canonical_reason().unwrap_or("request failed"),
+                        status.canonical_reason().unwrap_or("request failed"),
+                        Some(response.bytes().clone()),
+                    );
+                    merged_hooks
+                        .run_on_error(ErrorContext {
+                            request: req_ctx.clone(),
+                            response: Some(response.clone()),
+                            error: http_err.clone(),
+                        })
+                        .await;
+
+                    if throw_on_error {
+                        return Err(http_err);
+                    }
                     return Ok(response);
                 }
                 Err(err) => {
+                    if err.is_cancelled() {
+                        merged_hooks
+                            .run_on_error(ErrorContext {
+                                request: req_ctx.clone(),
+                                response: None,
+                                error: err.clone(),
+                            })
+                            .await;
+                        return Err(err);
+                    }
+
                     let retry_transport = matches!(&err, Error::Transport(_) | Error::Timeout);
                     if retry_transport && retry_policy.is_some() && attempt < max_attempts {
                         merged_hooks
@@ -274,7 +338,7 @@ impl Client {
                                     http::StatusCode::SERVICE_UNAVAILABLE,
                                     http::HeaderMap::new(),
                                     bytes::Bytes::new(),
-                                    Some(http_req.url.clone()),
+                                    Some(request_url.clone()),
                                     #[cfg(feature = "json")]
                                     None,
                                 ),
@@ -282,10 +346,10 @@ impl Client {
                             .await;
                         let delay = retry_policy
                             .as_ref()
-                            .map(|p| p.delay_before_attempt(attempt))
+                            .map(|p| p.delay_after_response(attempt, &http::HeaderMap::new()))
                             .unwrap_or(Duration::from_secs(1));
                         attempt += 1;
-                        sleep_before_retry(delay).await;
+                        sleep_or_cancel(delay, cancel_ref).await?;
                         continue;
                     }
 
@@ -398,9 +462,10 @@ impl ClientBuilder {
 
     /// Limits how many requests this client may have in flight at once (including retries).
     ///
-    /// Implemented with a tokio semaphore in the core client; does not require the `tower` feature.
-    /// For token-bucket rate limiting or richer policies, use [`Self::transport_stack`] with
-    /// Tower layers (feature `tower`).
+    /// Implemented with a tokio semaphore in the core client. This counts the full request
+    /// lifecycle (hooks and retries), not just the transport hop. For wire-level limits only,
+    /// use [`Self::transport_stack`] with Tower's [`ConcurrencyLimitLayer`](crate::tower::stack::ConcurrencyLimitLayer)
+    /// (feature `tower`) instead of—or deliberately alongside—this setting.
     pub fn max_in_flight(mut self, limit: usize) -> Self {
         self.max_in_flight = Some(limit);
         self
@@ -457,8 +522,9 @@ impl ClientBuilder {
 
     /// Sets a custom JSON parser for all responses from this client.
     ///
-    /// The parser receives raw response bytes and must return a [`serde_json::Value`].
-    /// Typed deserialization (`json`, `send_json`) then uses serde to map that value to `T`.
+    /// See [`crate::json_parser`] for the two-step `Bytes` → `Value` → `T` pipeline vs the
+    /// default single-step fast path, and [`Response::into_json_with`](crate::response::Response::into_json_with)
+    /// for per-response `Bytes` → `T` without a global parser.
     #[cfg(feature = "json")]
     pub fn json_parser<F>(mut self, f: F) -> Self
     where
@@ -479,11 +545,9 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<Client> {
-        let base_url = match self.base_url {
-            Some(url) => url,
-            None => Url::parse("http://localhost")
-                .map_err(|e| Error::Other(format!("invalid default base URL: {e}")))?,
-        };
+        let base_url = self
+            .base_url
+            .ok_or(Error::MissingBaseUrl)?;
 
         let backend: Arc<dyn HttpBackend> = if let Some(b) = self.custom_backend {
             b
@@ -491,6 +555,9 @@ impl ClientBuilder {
             let reqwest_client = self.reqwest_client.unwrap_or_default();
             Arc::new(ReqwestBackend::new(reqwest_client))
         };
+
+        let plugins = Arc::new(self.plugins);
+        let merged_hooks = self.hooks.clone().merge(plugins.merged_hooks());
 
         Ok(Client {
             config: Arc::new(ClientConfig {
@@ -500,7 +567,8 @@ impl ClientBuilder {
                 auth: self.auth,
                 default_headers: self.default_headers,
                 hooks: self.hooks,
-                plugins: Arc::new(self.plugins),
+                merged_hooks,
+                plugins,
                 max_in_flight: self.max_in_flight.map(|n| Arc::new(Semaphore::new(n))),
                 #[cfg(feature = "schema")]
                 schema_registry: self.schema_registry,

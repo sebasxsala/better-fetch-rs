@@ -5,6 +5,15 @@ use crate::error::Error;
 use crate::Result;
 
 /// HTTP response wrapper.
+///
+/// The full body is already buffered in memory as [`Bytes`] when you receive this type.
+/// Methods named `into_*` perform parsing synchronously; the `async` counterparts
+/// (`text`, `json`, …) delegate to `into_*` without additional I/O and exist for
+/// ergonomics in async code (e.g. [`RequestBuilder::send_json`](crate::request::RequestBuilder::send_json)).
+/// Prefer `into_json`, `into_text`, and `into_bytes_checked` on hot paths.
+///
+/// This model suits typical JSON APIs. It does not stream large downloads; use reqwest
+/// directly when you need chunked bodies or custom size limits.
 #[derive(Clone)]
 pub struct Response {
     status: StatusCode,
@@ -41,6 +50,7 @@ impl Response {
         &self.headers
     }
 
+    /// Returns a reference to the fully buffered response body.
     pub fn bytes(&self) -> &Bytes {
         &self.body
     }
@@ -68,43 +78,82 @@ impl Response {
     }
 
     /// Reads the body as UTF-8 after checking for a success status.
+    ///
+    /// Prefer this over [`text`](Self::text) when you do not need an `.await` (no extra I/O).
     pub fn into_text(self) -> Result<String> {
         self.error_for_status()?;
         Ok(String::from_utf8_lossy(&self.body).into_owned())
     }
 
-    /// Reads the body as UTF-8 after checking for a success status.
+    /// Async alias for [`into_text`](Self::into_text); does not perform additional I/O.
     pub async fn text(self) -> Result<String> {
         self.into_text()
     }
 
     /// Returns the body after checking for a success status.
+    ///
+    /// Prefer this over [`bytes_checked`](Self::bytes_checked) on hot paths.
     pub fn into_bytes_checked(self) -> Result<Bytes> {
         self.error_for_status()?;
         Ok(self.body)
     }
 
-    /// Returns the body after checking for a success status.
+    /// Async alias for [`into_bytes_checked`](Self::into_bytes_checked).
     pub async fn bytes_checked(self) -> Result<Bytes> {
         self.into_bytes_checked()
     }
 
+    /// Deserializes JSON after checking for a success status, using the client or request
+    /// [`JsonParserFn`](crate::json_parser::JsonParserFn) when configured.
+    ///
+    /// Prefer this over [`json`](Self::json) on hot paths. See [`crate::json_parser`] for the
+    /// default single-step path vs a custom two-step parser.
     #[cfg(feature = "json")]
     pub fn into_json<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         self.error_for_status()?;
         crate::json_parser::deserialize(&self.body, self.status, self.json_parser.as_ref())
     }
 
+    /// Async alias for [`into_json`](Self::into_json).
     #[cfg(feature = "json")]
     pub async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         self.into_json()
     }
 
+    /// Deserializes JSON in one step with a custom closure (`Bytes` → `T`).
+    ///
+    /// Ignores any client- or request-level [`JsonParserFn`](crate::json_parser::JsonParserFn).
+    /// Use this for BOM stripping or other transforms without the `Value` intermediate
+    /// required by [`ClientBuilder::json_parser`](crate::client::ClientBuilder::json_parser).
+    #[cfg(feature = "json")]
+    pub fn into_json_with<T, F>(self, parse: F) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+        F: FnOnce(&Bytes) -> std::result::Result<T, String>,
+    {
+        self.error_for_status()?;
+        parse(&self.body).map_err(|message| {
+            crate::json_parser::deserialize_error(self.status, message, &self.body)
+        })
+    }
+
+    /// Async alias for [`into_json_with`](Self::into_json_with).
+    #[cfg(feature = "json")]
+    pub async fn json_with<T, F>(self, parse: F) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+        F: FnOnce(&Bytes) -> std::result::Result<T, String>,
+    {
+        self.into_json_with(parse)
+    }
+
+    /// Deserializes JSON without checking HTTP status, using the configured [`JsonParserFn`](crate::json_parser::JsonParserFn) when set.
     #[cfg(feature = "json")]
     pub fn into_json_unchecked<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         crate::json_parser::deserialize(&self.body, self.status, self.json_parser.as_ref())
     }
 
+    /// Async alias for [`into_json_unchecked`](Self::into_json_unchecked).
     #[cfg(feature = "json")]
     pub async fn json_unchecked<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         self.into_json_unchecked()
@@ -212,5 +261,23 @@ mod tests {
             None,
         );
         assert_eq!(response.into_json::<IdOnly>().unwrap(), IdOnly { id: 7 });
+    }
+
+    #[test]
+    fn into_json_with_strips_bom_without_client_parser() {
+        let response = Response::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            Bytes::from_static(b"\xef\xbb\xbf{\"id\":3}"),
+            None,
+            None,
+        );
+        let parsed: IdOnly = response
+            .into_json_with(|body| {
+                let slice = body.strip_prefix(b"\xef\xbb\xbf").unwrap_or(body);
+                serde_json::from_slice(slice).map_err(|e| e.to_string())
+            })
+            .unwrap();
+        assert_eq!(parsed, IdOnly { id: 3 });
     }
 }

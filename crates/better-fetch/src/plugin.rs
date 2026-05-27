@@ -1,14 +1,22 @@
+//! Plugin hooks run after URL construction and auth, before request lifecycle hooks.
+//!
+//! Use [`Plugin::init`] to rewrite the target URL (e.g. add a query param) or inspect
+//! [`PreparedRequest::method`] / [`PreparedRequest::headers`] before the request is sent.
+
 use async_trait::async_trait;
+use http::{HeaderMap, Method};
 use url::Url;
 
 use crate::hooks::Hooks;
 use crate::Result;
 
-/// Prepared request state passed to plugin `init`.
+/// Prepared request state passed to plugin [`Plugin::init`].
 #[derive(Debug, Clone)]
 pub struct PreparedRequest {
     pub url: Url,
     pub path: String,
+    pub method: Method,
+    pub headers: HeaderMap,
 }
 
 /// Plugin extension point for better-fetch.

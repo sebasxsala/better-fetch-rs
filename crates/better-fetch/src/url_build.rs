@@ -1,10 +1,20 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use http::Method;
+use indexmap::IndexMap;
+use percent_encoding::{AsciiSet, utf8_percent_encode, NON_ALPHANUMERIC};
 use url::Url;
 
 use crate::error::Error;
 use crate::Result;
+
+/// RFC 3986 unreserved — same set as the former inline path param encoder.
+const PATH_PARAM_ENCODE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 /// Result of building a request URL.
 #[derive(Debug, Clone)]
@@ -14,11 +24,13 @@ pub struct BuiltUrl {
 }
 
 /// Build a request URL from base URL, path template, params, and query.
+///
+/// Query keys are serialized in insertion order ([`IndexMap`]).
 pub fn build_url(
     base: &Url,
     path: &str,
     params: &HashMap<String, String>,
-    query: &HashMap<String, QueryValue>,
+    query: &IndexMap<String, QueryValue>,
 ) -> Result<BuiltUrl> {
     if path.starts_with("http://") || path.starts_with("https://") {
         let (path_only, method_override) = parse_method_modifier(path);
@@ -42,7 +54,7 @@ pub fn build_url(
     })
 }
 
-fn apply_query(url: &mut Url, query: &HashMap<String, QueryValue>) -> Result<()> {
+fn apply_query(url: &mut Url, query: &IndexMap<String, QueryValue>) -> Result<()> {
     if query.is_empty() {
         return Ok(());
     }
@@ -92,8 +104,8 @@ fn substitute_params(path: &str, params: &HashMap<String, String>) -> Result<Str
         if !result.contains(&placeholder) {
             continue;
         }
-        let encoded = urlencoding::encode(value);
-        result = result.replace(&placeholder, &encoded);
+        let encoded: Cow<'_, str> = utf8_percent_encode(value, PATH_PARAM_ENCODE).into();
+        result = result.replace(&placeholder, encoded.as_ref());
     }
 
     if result.contains(':') {
@@ -150,21 +162,6 @@ impl QueryValue {
     }
 }
 
-mod urlencoding {
-    pub fn encode(input: &str) -> String {
-        let mut out = String::new();
-        for b in input.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    out.push(b as char);
-                }
-                _ => out.push_str(&format!("%{b:02X}")),
-            }
-        }
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,7 +174,7 @@ mod tests {
     fn substitutes_colon_params() {
         let mut params = HashMap::new();
         params.insert("id".into(), "42".into());
-        let built = build_url(&base(), "/todos/:id", &params, &HashMap::new()).unwrap();
+        let built = build_url(&base(), "/todos/:id", &params, &IndexMap::new()).unwrap();
         assert_eq!(built.url.as_str(), "https://api.example.com/todos/42");
     }
 
@@ -186,7 +183,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("id".into(), "1".into());
         params.insert("title".into(), "hello".into());
-        let built = build_url(&base(), "/post/:id/:title", &params, &HashMap::new()).unwrap();
+        let built = build_url(&base(), "/post/:id/:title", &params, &IndexMap::new()).unwrap();
         assert_eq!(built.url.as_str(), "https://api.example.com/post/1/hello");
     }
 
@@ -194,19 +191,19 @@ mod tests {
     fn encodes_special_characters_in_params() {
         let mut params = HashMap::new();
         params.insert("id".into(), "a/b".into());
-        let built = build_url(&base(), "/items/:id", &params, &HashMap::new()).unwrap();
+        let built = build_url(&base(), "/items/:id", &params, &IndexMap::new()).unwrap();
         assert!(built.url.path().contains("a%2Fb"));
     }
 
     #[test]
     fn missing_param_errors() {
-        let err = build_url(&base(), "/todos/:id", &HashMap::new(), &HashMap::new()).unwrap_err();
+        let err = build_url(&base(), "/todos/:id", &HashMap::new(), &IndexMap::new()).unwrap_err();
         assert!(matches!(err, Error::Other(_)));
     }
 
     #[test]
     fn query_scalar() {
-        let mut query = HashMap::new();
+        let mut query = IndexMap::new();
         query.insert("q".into(), QueryValue::Scalar("rust".into()));
         let built = build_url(&base(), "/search", &HashMap::new(), &query).unwrap();
         assert_eq!(built.url.query(), Some("q=rust"));
@@ -214,7 +211,7 @@ mod tests {
 
     #[test]
     fn query_array() {
-        let mut query = HashMap::new();
+        let mut query = IndexMap::new();
         query.insert(
             "tag".into(),
             QueryValue::Array(vec!["a".into(), "b".into()]),
@@ -226,6 +223,16 @@ mod tests {
     }
 
     #[test]
+    fn query_preserves_insertion_order() {
+        let mut query = IndexMap::new();
+        query.insert("z".into(), QueryValue::Scalar("1".into()));
+        query.insert("a".into(), QueryValue::Scalar("2".into()));
+        query.insert("m".into(), QueryValue::Scalar("3".into()));
+        let built = build_url(&base(), "/search", &HashMap::new(), &query).unwrap();
+        assert_eq!(built.url.query(), Some("z=1&a=2&m=3"));
+    }
+
+    #[test]
     fn method_modifier_put() {
         let (path, method) = parse_method_modifier("@put/user");
         assert_eq!(path, "user");
@@ -234,7 +241,7 @@ mod tests {
 
     #[test]
     fn method_modifier_in_build_url() {
-        let built = build_url(&base(), "@patch/items", &HashMap::new(), &HashMap::new()).unwrap();
+        let built = build_url(&base(), "@patch/items", &HashMap::new(), &IndexMap::new()).unwrap();
         assert_eq!(built.url.path(), "/items");
         assert_eq!(built.method_override, Some(Method::PATCH));
     }
@@ -247,7 +254,7 @@ mod tests {
             &base(),
             "https://other.example.com/users/:id",
             &params,
-            &HashMap::new(),
+            &IndexMap::new(),
         )
         .unwrap();
         assert_eq!(built.url.as_str(), "https://other.example.com/users/5");
@@ -255,7 +262,7 @@ mod tests {
 
     #[test]
     fn empty_path_uses_base() {
-        let built = build_url(&base(), "", &HashMap::new(), &HashMap::new()).unwrap();
+        let built = build_url(&base(), "", &HashMap::new(), &IndexMap::new()).unwrap();
         assert_eq!(built.url.as_str(), "https://api.example.com/");
     }
 }
@@ -275,7 +282,7 @@ mod proptests {
                 &Url::parse("https://api.example.com").unwrap(),
                 &template,
                 &params,
-                &HashMap::new(),
+                &IndexMap::new(),
             )
             .unwrap();
             prop_assert!(built.url.as_str().ends_with("/42"));
