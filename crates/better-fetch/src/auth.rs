@@ -1,3 +1,9 @@
+//! Authentication for clients and individual requests.
+//!
+//! Configure with [`ClientBuilder::auth`](crate::ClientBuilder::auth) or
+//! [`RequestBuilder::auth`](crate::RequestBuilder::auth). Credentials can be static,
+//! resolved synchronously, or fetched asynchronously.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,15 +15,23 @@ use http::HeaderMap;
 /// Authentication configuration for a client or request.
 #[derive(Clone)]
 pub enum Auth {
+    /// `Authorization: Bearer …`
     Bearer {
+        /// Token source.
         token: TokenSource,
     },
+    /// `Authorization: Basic …`
     Basic {
+        /// Username source.
         username: TokenSource,
+        /// Password source.
         password: TokenSource,
     },
+    /// `Authorization: {prefix} {value}`
     Custom {
+        /// Header scheme prefix (e.g. `"Token"`).
         prefix: String,
+        /// Credential value source.
         value: TokenSource,
     },
 }
@@ -25,13 +39,17 @@ pub enum Auth {
 /// Source for credential values (static, sync, or async).
 #[derive(Clone)]
 pub enum TokenSource {
+    /// Fixed string credential.
     Static(String),
+    /// Resolved on each request via a sync closure.
     Fn(Arc<dyn Fn() -> Option<String> + Send + Sync>),
+    /// Resolved on each request via an async provider.
     AsyncFn(Arc<dyn AsyncTokenProvider>),
 }
 
 /// Async token resolver.
 pub trait AsyncTokenProvider: Send + Sync {
+    /// Returns the credential, or `None` to skip adding a header.
     fn resolve(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
 }
 
@@ -47,18 +65,29 @@ where
 }
 
 impl Auth {
+    /// Bearer token from a static string.
     pub fn bearer(token: impl Into<String>) -> Self {
         Self::Bearer {
             token: TokenSource::Static(token.into()),
         }
     }
 
+    /// Bearer token from a closure (e.g. read from a cache).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use better_fetch::Auth;
+    ///
+    /// let auth = Auth::bearer_fn(|| Some("cached-token".into()));
+    /// ```
     pub fn bearer_fn(f: impl Fn() -> Option<String> + Send + Sync + 'static) -> Self {
         Self::Bearer {
             token: TokenSource::Fn(Arc::new(f)),
         }
     }
 
+    /// Basic authentication with static username and password.
     pub fn basic(username: impl Into<String>, password: impl Into<String>) -> Self {
         Self::Basic {
             username: TokenSource::Static(username.into()),
@@ -66,6 +95,7 @@ impl Auth {
         }
     }
 
+    /// Writes the `Authorization` header into `headers`.
     pub async fn apply(&self, headers: &mut HeaderMap) -> crate::Result<()> {
         match self {
             Self::Bearer { token } => {

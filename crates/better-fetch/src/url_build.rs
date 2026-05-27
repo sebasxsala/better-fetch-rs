@@ -136,11 +136,14 @@ fn join_path(base: &Url, path: &str) -> Result<Url> {
 /// Query parameter value (scalar or repeated).
 #[derive(Debug, Clone)]
 pub enum QueryValue {
+    /// Single query value.
     Scalar(String),
+    /// Repeated query key (`key=a&key=b`).
     Array(Vec<String>),
 }
 
 impl QueryValue {
+    /// Encodes a serializable value as a scalar or array query param (feature `json`).
     #[cfg(feature = "json")]
     pub fn from_serializable<T: serde::Serialize>(value: &T) -> Result<Self> {
         match serde_json::to_value(value).map_err(|e| Error::Other(e.to_string()))? {

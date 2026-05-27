@@ -20,9 +20,13 @@ use crate::Result;
 /// Context for an outgoing request.
 #[derive(Debug, Clone)]
 pub struct RequestContext {
+    /// Final URL after plugins and hook mutations.
     pub url: Url,
+    /// HTTP method.
     pub method: Method,
+    /// Request headers.
     pub headers: HeaderMap,
+    /// Request body when present.
     pub body: Option<Bytes>,
     /// Number of times this request has already been retried (`0` on the first HTTP attempt).
     ///
@@ -33,22 +37,29 @@ pub struct RequestContext {
 /// Context after a response is received.
 #[derive(Debug, Clone)]
 pub struct ResponseContext {
+    /// Original request context.
     pub request: RequestContext,
+    /// Response from the transport (may be mutated by hooks).
     pub response: Response,
 }
 
 /// Context after a successful HTTP response (2xx).
 #[derive(Debug, Clone)]
 pub struct SuccessContext {
+    /// Original request context.
     pub request: RequestContext,
+    /// Successful response.
     pub response: Response,
 }
 
 /// Context when an error occurs.
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
+    /// Original request context.
     pub request: RequestContext,
+    /// Response when the error is HTTP-related.
     pub response: Option<Response>,
+    /// Error that occurred.
     pub error: Error,
 }
 
@@ -82,11 +93,31 @@ pub struct Hooks {
 }
 
 impl Hooks {
+    /// Creates an empty hook chain.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Runs before the transport call. Return `Err(Error::hook("…"))` to cancel the request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use better_fetch::{ClientBuilder, Error, Hooks, Result};
+    ///
+    /// let hooks = Hooks::new().on_request(|ctx| async move {
+    ///     if ctx.url.path().contains("blocked") {
+    ///         return Err(Error::hook("path not allowed"));
+    ///     }
+    ///     Ok(ctx)
+    /// });
+    ///
+    /// let client = ClientBuilder::new()
+    ///     .base_url("https://api.example.com")?
+    ///     .hooks(hooks)
+    ///     .build()?;
+    /// # Ok::<(), better_fetch::Error>(())
+    /// ```
     pub fn on_request<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
@@ -106,6 +137,7 @@ impl Hooks {
         self
     }
 
+    /// Runs after a successful (2xx) response; cannot abort the pipeline.
     pub fn on_success<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(SuccessContext) -> Fut + Send + Sync + 'static,
@@ -115,6 +147,7 @@ impl Hooks {
         self
     }
 
+    /// Runs when an error occurs; cannot abort the pipeline.
     pub fn on_error<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(ErrorContext) -> Fut + Send + Sync + 'static,
@@ -124,6 +157,7 @@ impl Hooks {
         self
     }
 
+    /// Runs before a transport retry is scheduled.
     pub fn on_retry<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(ResponseContext) -> Fut + Send + Sync + 'static,

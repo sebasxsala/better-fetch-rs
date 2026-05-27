@@ -7,11 +7,14 @@ use crate::plugin::Plugin;
 /// Tracing-based logger plugin (request, response, retry, error).
 #[derive(Debug, Clone)]
 pub struct LoggerPlugin {
+    /// When `false`, hooks are registered but do not log.
     pub enabled: bool,
+    /// When `true`, includes method and URL on each line.
     pub verbose: bool,
 }
 
 impl LoggerPlugin {
+    /// Creates a plugin with logging enabled.
     pub fn new() -> Self {
         Self {
             enabled: true,
@@ -19,11 +22,13 @@ impl LoggerPlugin {
         }
     }
 
+    /// Enables or disables log output.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Enables verbose log fields.
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
@@ -38,6 +43,7 @@ impl Default for LoggerPlugin {
 
 #[async_trait]
 impl Plugin for LoggerPlugin {
+    /// Plugin id: `"logger"`.
     fn id(&self) -> &'static str {
         "logger"
     }

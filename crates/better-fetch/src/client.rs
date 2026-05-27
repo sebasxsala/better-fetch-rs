@@ -1,3 +1,8 @@
+//! HTTP client, builder, and shared configuration.
+//!
+//! Start with [`Client::new`] or [`ClientBuilder`], then [`Client::get`] / [`Client::post`] /
+//! [`Client::call`] for typed [`Endpoint`] routes. See [`crate::request`] for per-request options.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,16 +43,23 @@ fn body_for_context(body: &HttpBody) -> Option<bytes::Bytes> {
     }
 }
 
-/// Shared client configuration.
+/// Shared client configuration (returned by [`Client::config`]).
 #[derive(Clone)]
 pub struct ClientConfig {
+    /// Base URL joined with request paths.
     pub base_url: Url,
+    /// Default per-request timeout when the builder does not override it.
     pub timeout: Option<Duration>,
+    /// Default retry policy for requests that do not set their own.
     pub retry: Option<RetryPolicy>,
+    /// Default authentication applied when a request has no per-request auth.
     pub auth: Option<Auth>,
+    /// Headers merged into every request unless overridden.
     pub default_headers: http::HeaderMap,
+    /// Client-level lifecycle hooks (merged with plugin hooks at build time).
     pub hooks: Hooks,
     pub(crate) merged_hooks: Hooks,
+    /// Registered plugins (init hooks + merged hook chains).
     pub plugins: Arc<PluginRegistry>,
     /// Limits concurrent in-flight requests for this client (including retries).
     ///
@@ -56,8 +68,10 @@ pub struct ClientConfig {
     /// limits only transport-layer concurrency. Avoid stacking both without accounting for that.
     pub max_in_flight: Option<Arc<Semaphore>>,
     #[cfg(feature = "schema")]
+    /// Optional strict route registry (feature `schema`).
     pub schema_registry: Option<Arc<SchemaRegistry>>,
     #[cfg(feature = "json")]
+    /// Client-wide custom JSON parser (feature `json`).
     pub json_parser: Option<JsonParserFn>,
 }
 
@@ -69,10 +83,24 @@ pub struct Client {
 }
 
 impl Client {
+    /// Creates a client with default reqwest settings and the given base URL.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Result};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let _ = client.get("/health").send().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(base_url: impl AsRef<str>) -> Result<Self> {
         ClientBuilder::new().base_url(base_url)?.build()
     }
 
+    /// Returns a [`ClientBuilder`] for advanced configuration.
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
@@ -85,39 +113,49 @@ impl Client {
             .build()
     }
 
-    /// Start a typed request for [`Endpoint`] `E`.
+    /// Starts a typed request for [`Endpoint`] `E`.
+    ///
+    /// See [`Endpoint`] for an example.
     pub fn call<E: Endpoint>(&self) -> EndpointRequestBuilder<'_, E> {
         EndpointRequestBuilder::new(self.request(E::METHOD, E::PATH))
     }
 
+    /// Returns a snapshot of this client's configuration.
     pub fn config(&self) -> &ClientConfig {
         &self.config
     }
 
+    /// Starts a `GET` request for `path` (supports `:param` templates).
     pub fn get(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::GET, path)
     }
 
+    /// Starts a `POST` request for `path`.
     pub fn post(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::POST, path)
     }
 
+    /// Starts a `PUT` request for `path`.
     pub fn put(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::PUT, path)
     }
 
+    /// Starts a `PATCH` request for `path`.
     pub fn patch(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::PATCH, path)
     }
 
+    /// Starts a `DELETE` request for `path`.
     pub fn delete(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::DELETE, path)
     }
 
+    /// Starts a `HEAD` request for `path`.
     pub fn head(&self, path: impl Into<String>) -> RequestBuilder<'_> {
         self.request(Method::HEAD, path)
     }
 
+    /// Starts a request with an explicit HTTP method and path.
     pub fn request(&self, method: Method, path: impl Into<String>) -> RequestBuilder<'_> {
         RequestBuilder {
             client: self,
@@ -391,6 +429,7 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Creates an empty builder; [`Self::base_url`] is required before [`Self::build`].
     pub fn new() -> Self {
         Self {
             base_url: None,
@@ -410,26 +449,31 @@ impl ClientBuilder {
         }
     }
 
+    /// Sets the base URL (required).
     pub fn base_url(mut self, base_url: impl AsRef<str>) -> Result<Self> {
         self.base_url = Some(Url::parse(base_url.as_ref()).map_err(Error::InvalidBaseUrl)?);
         Ok(self)
     }
 
+    /// Sets the default request timeout.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
+    /// Sets the default [`RetryPolicy`] for all requests.
     pub fn retry(mut self, policy: RetryPolicy) -> Self {
         self.retry = Some(policy);
         self
     }
 
+    /// Sets default authentication for all requests.
     pub fn auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
         self
     }
 
+    /// Adds a default header applied to every request.
     pub fn default_header(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Result<Self> {
         let name = http::HeaderName::from_bytes(key.as_ref().as_bytes())
             .map_err(|e| Error::Other(format!("invalid header name: {e}")))?;
@@ -439,22 +483,53 @@ impl ClientBuilder {
         Ok(self)
     }
 
+    /// Sets client-level lifecycle hooks.
     pub fn hooks(mut self, hooks: Hooks) -> Self {
         self.hooks = hooks;
         self
     }
 
+    /// Registers a [`Plugin`] on this client.
     pub fn plugin<P: crate::plugin::Plugin + 'static>(mut self, plugin: P) -> Self {
         self.plugins.push(Box::new(plugin));
         self
     }
 
+    /// Uses a custom reqwest client for the default [`ReqwestBackend`].
     pub fn reqwest_client(mut self, client: ReqwestClient) -> Self {
         self.reqwest_client = Some(client);
         self
     }
 
     /// Use a custom HTTP backend (for testing or alternate transports).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{ClientBuilder, HttpBackend, HttpRequest, HttpResponse, Result};
+    /// # use async_trait::async_trait;
+    /// # use bytes::Bytes;
+    /// # use http::StatusCode;
+    /// # use std::sync::Arc;
+    /// # struct MockBackend;
+    /// # #[async_trait]
+    /// # impl HttpBackend for MockBackend {
+    /// #     async fn execute(&self, _req: HttpRequest) -> Result<HttpResponse> {
+    /// #         Ok(HttpResponse {
+    /// #             status: StatusCode::OK,
+    /// #             headers: Default::default(),
+    /// #             body: Bytes::from_static(b"{}"),
+    /// #         })
+    /// #     }
+    /// # }
+    /// # fn example() -> Result<()> {
+    /// let client = ClientBuilder::new()
+    ///     .base_url("https://api.example.com")?
+    ///     .backend(Arc::new(MockBackend))
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn backend(mut self, backend: Arc<dyn HttpBackend>) -> Self {
         self.custom_backend = Some(backend);
         self
@@ -507,6 +582,23 @@ impl ClientBuilder {
     ///
     /// Application hooks and [`RetryPolicy`](crate::RetryPolicy) remain in the core client;
     /// only wire-level behavior is configured here.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{ClientBuilder, Result};
+    /// # use better_fetch::tower::stack::{ConcurrencyLimitLayer, IntoBoxHttpService, ServiceBuilder};
+    /// let client = ClientBuilder::new()
+    ///     .base_url("https://api.example.com")?
+    ///     .transport_stack(|inner| {
+    ///         ServiceBuilder::new()
+    ///             .layer(ConcurrencyLimitLayer::new(32))
+    ///             .service(inner)
+    ///             .into_box()
+    ///     })
+    ///     .build()?;
+    /// # Ok::<(), better_fetch::Error>(())
+    /// ```
     #[cfg(feature = "tower")]
     pub fn transport_stack<F>(mut self, configure: F) -> Self
     where
@@ -525,6 +617,21 @@ impl ClientBuilder {
     /// See [`crate::json_parser`] for the two-step `Bytes` → `Value` → `T` pipeline vs the
     /// default single-step fast path, and [`Response::into_json_with`](crate::response::Response::into_json_with)
     /// for per-response `Bytes` → `T` without a global parser.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{ClientBuilder, Result};
+    /// # use bytes::Bytes;
+    /// let client = ClientBuilder::new()
+    ///     .base_url("https://api.example.com")?
+    ///     .json_parser(|body: &Bytes| {
+    ///         let slice = body.strip_prefix(b"\xef\xbb\xbf").unwrap_or(body);
+    ///         serde_json::from_slice(slice).map_err(|e| e.to_string())
+    ///     })
+    ///     .build()?;
+    /// # Ok::<(), better_fetch::Error>(())
+    /// ```
     #[cfg(feature = "json")]
     pub fn json_parser<F>(mut self, f: F) -> Self
     where
@@ -544,6 +651,17 @@ impl ClientBuilder {
         self
     }
 
+    /// Builds the [`Client`]. Requires [`Self::base_url`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{ClientBuilder, Result};
+    /// let client = ClientBuilder::new()
+    ///     .base_url("https://api.example.com")?
+    ///     .build()?;
+    /// # Ok::<(), better_fetch::Error>(())
+    /// ```
     pub fn build(self) -> Result<Client> {
         let base_url = self
             .base_url

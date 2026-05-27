@@ -1,3 +1,8 @@
+//! Retry policies for transport and HTTP failures.
+//!
+//! Configure on [`ClientBuilder::retry`](crate::ClientBuilder::retry) or per-request
+//! [`RequestBuilder::retry`](crate::RequestBuilder::retry).
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,22 +17,42 @@ pub type ShouldRetryFn = Arc<dyn Fn(&Response) -> bool + Send + Sync>;
 ///
 /// The `attempts` value is the maximum number of **retries after the initial request**.
 /// For example, `RetryPolicy::count(2)` performs up to three HTTP calls (one initial + two retries).
+///
+/// # Examples
+///
+/// ```
+/// use better_fetch::RetryPolicy;
+///
+/// // Up to 3 HTTP calls total (1 initial + 2 retries), 1s between attempts
+/// let policy = RetryPolicy::count(2);
+/// assert_eq!(policy.max_attempts(), 2);
+/// ```
 #[derive(Clone)]
 pub enum RetryPolicy {
     /// Shorthand for linear retry with `attempts` retries and a 1 second delay between attempts.
     Count {
+        /// Maximum retries after the first request.
         attempts: u32,
+        /// Optional custom retry predicate.
         should_retry: Option<ShouldRetryFn>,
     },
+    /// Fixed delay between retries.
     Linear {
+        /// Maximum retries after the first request.
         attempts: u32,
+        /// Delay between attempts.
         delay: Duration,
         should_retry: Option<ShouldRetryFn>,
+        /// When `true`, randomizes delay (see [`Self::with_jitter`]).
         jitter: bool,
     },
+    /// Exponential backoff capped at `max_delay`.
     Exponential {
+        /// Maximum retries after the first request.
         attempts: u32,
+        /// Initial backoff duration.
         base_delay: Duration,
+        /// Upper bound on backoff.
         max_delay: Duration,
         should_retry: Option<ShouldRetryFn>,
         jitter: bool,
@@ -35,6 +60,7 @@ pub enum RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// Shorthand: `attempts` retries with 1 second delay and default status codes.
     pub fn count(attempts: u32) -> Self {
         Self::Count {
             attempts,
@@ -42,6 +68,7 @@ impl RetryPolicy {
         }
     }
 
+    /// Linear backoff with a fixed `delay` between retries.
     pub fn linear(attempts: u32, delay: Duration) -> Self {
         Self::Linear {
             attempts,
@@ -51,6 +78,7 @@ impl RetryPolicy {
         }
     }
 
+    /// Exponential backoff from `base_delay` up to `max_delay` (jitter enabled by default).
     pub fn exponential(attempts: u32, base_delay: Duration, max_delay: Duration) -> Self {
         Self::Exponential {
             attempts,
@@ -70,6 +98,7 @@ impl RetryPolicy {
         self
     }
 
+    /// Overrides the default retry predicate (408, 429, 502, 503, 504).
     pub fn with_should_retry(self, f: ShouldRetryFn) -> Self {
         match self {
             Self::Count { attempts, .. } => Self::Count {
@@ -103,7 +132,8 @@ impl RetryPolicy {
         }
     }
 
-    pub(crate) fn max_attempts(&self) -> u32 {
+    /// Returns the maximum number of retries after the initial request.
+    pub fn max_attempts(&self) -> u32 {
         match self {
             Self::Count { attempts, .. }
             | Self::Linear { attempts, .. }
@@ -167,6 +197,7 @@ impl RetryPolicy {
     }
 }
 
+/// Default HTTP status codes that trigger a retry when no custom predicate is set.
 pub fn default_should_retry(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
 }

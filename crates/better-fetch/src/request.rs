@@ -1,3 +1,8 @@
+//! Per-request fluent builder.
+//!
+//! Obtain a [`RequestBuilder`] from [`Client::get`](crate::Client::get) (or other verbs), chain
+//! path/query/body options, then call [`RequestBuilder::send`] or [`RequestBuilder::send_json`].
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -19,6 +24,10 @@ use crate::Result;
 use crate::json_parser::JsonParserFn;
 
 /// Fluent builder for a single HTTP request.
+///
+/// By default [`send`](Self::send) returns [`Response`] even on non-2xx status. Use
+/// [`throw_on_error`](Self::throw_on_error)(`true`) to get `Err` from `send`, or use
+/// [`send_json`](Self::send_json) which checks status before deserializing.
 pub struct RequestBuilder<'a> {
     pub(crate) client: &'a Client,
     pub(crate) method: Method,
@@ -41,16 +50,19 @@ pub struct RequestBuilder<'a> {
 }
 
 impl<'a> RequestBuilder<'a> {
+    /// Sets a path template parameter (`:key` in the path).
     pub fn param(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.params.insert(key.into(), value.to_string());
         self
     }
 
+    /// Merges path parameters from a map.
     pub fn params(mut self, params: HashMap<String, String>) -> Self {
         self.params.extend(params);
         self
     }
 
+    /// Merges path parameters from an iterator.
     pub fn params_iter(
         mut self,
         params: impl IntoIterator<Item = (impl Into<String>, impl ToString)>,
@@ -61,6 +73,7 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
+    /// Adds a query string parameter.
     pub fn query(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.query
             .insert(key.into(), QueryValue::Scalar(value.to_string()));
@@ -75,6 +88,7 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
+    /// Serializes `value` as JSON and uses it as a query parameter (feature `json`).
     #[cfg(feature = "json")]
     pub fn query_json<T: serde::Serialize>(
         mut self,
@@ -86,6 +100,7 @@ impl<'a> RequestBuilder<'a> {
         Ok(self)
     }
 
+    /// Adds a request header.
     pub fn header(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Result<Self> {
         let name = http::HeaderName::from_bytes(key.as_ref().as_bytes())
             .map_err(|e| Error::Other(format!("invalid header name: {e}")))?;
@@ -95,6 +110,7 @@ impl<'a> RequestBuilder<'a> {
         Ok(self)
     }
 
+    /// Sets a JSON request body (feature `json`).
     #[cfg(feature = "json")]
     pub fn json<T: serde::Serialize>(mut self, body: &T) -> Result<Self> {
         let bytes = serde_json::to_vec(body).map_err(|e| Error::Other(e.to_string()))?;
@@ -108,6 +124,7 @@ impl<'a> RequestBuilder<'a> {
         Ok(self)
     }
 
+    /// Sets a raw request body.
     pub fn body(mut self, body: impl Into<Bytes>) -> Self {
         self.body = HttpBody::Bytes(body.into());
         self
@@ -135,6 +152,8 @@ impl<'a> RequestBuilder<'a> {
     }
 
     /// Multipart form body (requires the `multipart` feature).
+    ///
+    /// Automatic retry is not supported when multipart bodies are used.
     #[cfg(feature = "multipart")]
     pub fn multipart(mut self, form: crate::multipart::Form) -> Self {
         self.multipart = Some(form);
@@ -142,27 +161,56 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
+    /// Overrides the client default timeout for this request.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
+    /// Overrides the client default retry policy for this request.
     pub fn retry(mut self, policy: RetryPolicy) -> Self {
         self.retry = Some(policy);
         self
     }
 
+    /// Overrides authentication for this request.
     pub fn auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
         self
     }
 
+    /// Sets bearer authentication for this request.
     pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
         self.auth = Some(Auth::bearer(token));
         self
     }
 
     /// Cancels the in-flight request and retry sleeps when this token is triggered.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{CancellationToken, Client, Result};
+    /// # use std::time::Duration;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let token = CancellationToken::new();
+    /// let token_clone = token.clone();
+    /// tokio::spawn(async move {
+    ///     tokio::time::sleep(Duration::from_millis(10)).await;
+    ///     token_clone.cancel();
+    /// });
+    /// let err = client
+    ///     .get("/slow")
+    ///     .cancellation_token(token)
+    ///     .send()
+    ///     .await
+    ///     .unwrap_err();
+    /// assert!(err.is_cancelled());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
         self.cancellation = Some(token);
         self
@@ -193,10 +241,49 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
+    /// Executes the request and returns the [`Response`].
+    ///
+    /// Non-2xx responses are returned as `Ok(Response)` unless [`throw_on_error`](Self::throw_on_error)
+    /// is `true`. Deserialize JSON with [`Response::json`](crate::Response::json) or use
+    /// [`send_json`](Self::send_json) for a one-step typed result.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Result};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let response = client.get("/users/1").send().await?;
+    /// if response.is_success() {
+    ///     println!("status {}", response.status());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send(self) -> Result<Response> {
         self.client.execute(self).await
     }
 
+    /// Executes the request and deserializes JSON on success (feature `json`).
+    ///
+    /// Fails with [`Error::Http`](crate::Error::Http) or [`Error::Deserialize`](crate::Error::Deserialize)
+    /// on non-2xx or invalid JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Result};
+    /// # use serde::Deserialize;
+    /// # #[derive(Deserialize)]
+    /// # struct User { id: u64 }
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let user: User = client.get("/users/:id").param("id", 1).send_json().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "json")]
     #[must_use = "send the request with `.await` and handle the result"]
     pub async fn send_json<T: serde::de::DeserializeOwned>(self) -> Result<T> {
@@ -210,7 +297,7 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
-    /// `send` + [`Response::json_validated`](crate::Response::json_validated).
+    /// `send` + [`Response::json_validated`](crate::Response::json_validated) (feature `validate`).
     #[cfg(feature = "validate")]
     pub async fn send_json_validated<T>(self) -> Result<T>
     where

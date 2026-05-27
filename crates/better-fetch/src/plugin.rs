@@ -13,21 +13,28 @@ use crate::Result;
 /// Prepared request state passed to plugin [`Plugin::init`].
 #[derive(Debug, Clone)]
 pub struct PreparedRequest {
+    /// URL after path/query resolution (may be mutated by plugins).
     pub url: Url,
+    /// Original path template from the builder.
     pub path: String,
+    /// HTTP method.
     pub method: Method,
+    /// Headers before transport.
     pub headers: HeaderMap,
 }
 
 /// Plugin extension point for better-fetch.
 #[async_trait]
 pub trait Plugin: Send + Sync {
+    /// Unique plugin identifier.
     fn id(&self) -> &'static str;
 
+    /// Called before lifecycle hooks; may mutate `prepared`.
     async fn init(&self, _prepared: &mut PreparedRequest) -> Result<()> {
         Ok(())
     }
 
+    /// Hooks merged into the client hook chain at build time.
     fn hooks(&self) -> Hooks {
         Hooks::default()
     }
@@ -40,19 +47,23 @@ pub struct PluginRegistry {
 }
 
 impl PluginRegistry {
+    /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Registers a plugin and returns `self` for chaining.
     pub fn register<P: Plugin + 'static>(mut self, plugin: P) -> Self {
         self.plugins.push(Box::new(plugin));
         self
     }
 
+    /// Appends a plugin to the registry.
     pub fn push(&mut self, plugin: Box<dyn Plugin>) {
         self.plugins.push(plugin);
     }
 
+    /// Returns registered plugins.
     pub fn plugins(&self) -> &[Box<dyn Plugin>] {
         &self.plugins
     }

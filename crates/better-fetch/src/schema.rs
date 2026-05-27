@@ -11,11 +11,17 @@ use crate::Result;
 /// Metadata describing a single endpoint for documentation and codegen.
 #[derive(Debug, Clone)]
 pub struct EndpointSchema {
+    /// Route path template.
     pub path: String,
+    /// HTTP method.
     pub method: Method,
+    /// JSON request body schema.
     pub request_schema: Option<RootSchema>,
+    /// JSON response schema.
     pub response_schema: Option<RootSchema>,
+    /// Query string schema.
     pub query_schema: Option<RootSchema>,
+    /// Path parameter schema.
     pub params_schema: Option<RootSchema>,
 }
 
@@ -34,6 +40,7 @@ impl Default for SchemaRegistry {
 }
 
 impl SchemaRegistry {
+    /// Creates an empty registry (non-strict by default).
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -42,15 +49,18 @@ impl SchemaRegistry {
         }
     }
 
+    /// When `true`, [`Self::ensure_route`] rejects unregistered paths at request time.
     pub fn strict(mut self, strict: bool) -> Self {
         self.strict = strict;
         self
     }
 
+    /// Returns whether strict route validation is enabled.
     pub fn is_strict(&self) -> bool {
         self.strict
     }
 
+    /// Registers path, method, and optional request/response JSON schemas.
     pub fn register_endpoint(
         &mut self,
         path: impl Into<String>,
@@ -70,6 +80,7 @@ impl SchemaRegistry {
         });
     }
 
+    /// Registers a route with request, response, query, and params schemas.
     pub fn register_full(
         &mut self,
         path: impl Into<String>,
@@ -91,6 +102,7 @@ impl SchemaRegistry {
         });
     }
 
+    /// Registers schemas derived from [`Endpoint`](crate::Endpoint) and `JsonSchema` types.
     pub fn register_typed<E, Req, Res>(&mut self)
     where
         E: crate::Endpoint,
@@ -124,6 +136,7 @@ impl SchemaRegistry {
         }
     }
 
+    /// Returns all registered endpoint metadata.
     pub fn entries(&self) -> &[EndpointSchema] {
         &self.entries
     }

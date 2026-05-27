@@ -3,6 +3,56 @@
 //! Typed HTTP client layer on top of [reqwest](https://docs.rs/reqwest), inspired by
 //! [@better-fetch/fetch](https://better-fetch.vercel.app/docs). This crate is not affiliated
 //! with the upstream TypeScript project.
+//!
+//! ## Quick flow
+//!
+//! 1. Create a [`Client`] (or [`ClientBuilder`]) with a base URL.
+//! 2. Start a request with [`Client::get`] / [`Client::post`] / [`Client::call`].
+//! 3. Configure path params, query, body, auth, retries on [`RequestBuilder`].
+//! 4. Execute with [`RequestBuilder::send`] (returns [`Response`]) or [`RequestBuilder::send_json`]
+//!    (deserializes JSON and fails on non-2xx).
+//!
+//! ## Cargo features
+//!
+//! | Feature | Description |
+//! |---------|-------------|
+//! | `json` (default) | JSON bodies, `send_json`, custom [`JsonParserFn`] |
+//! | `reqwest` / `rustls-tls` (default) | Reqwest backend |
+//! | `multipart` | [`RequestBuilder::multipart`] |
+//! | `tower` | Tower transport stack via [`ClientBuilder::transport_stack`] |
+//! | `schema` | [`SchemaRegistry`] route metadata |
+//! | `openapi` | OpenAPI 3.0 export from schema registry |
+//! | `validate` | Garde validation on JSON responses |
+//! | `macros` | Proc-macro helpers (reserved) |
+//!
+//! See the [repository README](https://github.com/sebasxsala/better-fetch-rs) for full examples.
+//!
+//! ## Example
+//!
+//! ```no_run
+//! # use better_fetch::{Client, Result};
+//! # use serde::Deserialize;
+//! # #[derive(Debug, Deserialize)]
+//! # #[serde(rename_all = "camelCase")]
+//! # struct Todo { user_id: u64, id: u64, title: String, completed: bool }
+//! # #[tokio::main]
+//! # async fn main() -> Result<()> {
+//! let client = Client::new("https://jsonplaceholder.typicode.com")?;
+//!
+//! // send() returns Response for any status; json() fails on non-2xx
+//! let todo: Todo = client
+//!     .get("/todos/:id")
+//!     .param("id", 1)
+//!     .send()
+//!     .await?
+//!     .json()
+//!     .await?;
+//!
+//! // Or in one step:
+//! let todo: Todo = client.get("/todos/:id").param("id", 1).send_json().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 mod url_build;
 
@@ -37,6 +87,7 @@ pub use auth::{AsyncTokenProvider, Auth, TokenSource};
 pub use backend::{HttpBackend, HttpBody, HttpRequest, HttpResponse, ReqwestBackend};
 pub use cancel::CancellationToken;
 #[cfg(feature = "multipart")]
+/// Re-export of [reqwest multipart](https://docs.rs/reqwest/latest/reqwest/multipart/) types (feature `multipart`).
 pub use reqwest::multipart;
 pub use client::{Client, ClientBuilder, ClientConfig};
 pub use endpoint::{Endpoint, EndpointParams, EndpointQuery, EndpointRequestBuilder};

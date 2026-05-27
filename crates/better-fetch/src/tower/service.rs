@@ -21,14 +21,17 @@ pub struct ReqwestHttpService {
 }
 
 impl ReqwestHttpService {
+    /// Creates a service that uses the given reqwest client.
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
     }
 
+    /// Creates a service with a default reqwest client.
     pub fn default_client() -> Self {
         Self::new(reqwest::Client::new())
     }
 
+    /// Returns the underlying reqwest client.
     pub fn client(&self) -> &reqwest::Client {
         &self.client
     }
@@ -79,6 +82,7 @@ pub struct ServiceBackend {
 }
 
 impl ServiceBackend {
+    /// Wraps a Tower service as an [`HttpBackend`](crate::backend::HttpBackend).
     pub fn new<S>(service: S) -> Self
     where
         S: Service<HttpRequest, Response = HttpResponse, Error = Error> + Clone + Send + 'static,
@@ -89,12 +93,14 @@ impl ServiceBackend {
         }
     }
 
+    /// Wraps an already-boxed transport stack.
     pub fn from_box(service: BoxHttpService) -> Self {
         Self {
             inner: Arc::new(Mutex::new(service)),
         }
     }
 
+    /// Returns the mutex guard around the inner service (for advanced testing).
     pub async fn lock_inner(&self) -> tokio::sync::MutexGuard<'_, BoxHttpService> {
         self.inner.lock().await
     }

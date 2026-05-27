@@ -1,3 +1,8 @@
+//! HTTP response wrapper with buffered body.
+//!
+//! Responses are fully buffered in memory. Prefer [`Response::into_json`] and
+//! [`Response::into_text`] on hot paths; async methods are aliases without extra I/O.
+
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 
@@ -42,10 +47,12 @@ impl Response {
         }
     }
 
+    /// HTTP status code.
     pub fn status(&self) -> StatusCode {
         self.status
     }
 
+    /// Response headers.
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
@@ -55,10 +62,12 @@ impl Response {
         &self.body
     }
 
+    /// Final request URL when available.
     pub fn url(&self) -> Option<&url::Url> {
         self.url.as_ref()
     }
 
+    /// Returns `true` for 2xx status codes.
     pub fn is_success(&self) -> bool {
         self.status.is_success()
     }
@@ -208,6 +217,7 @@ impl Response {
         self.into_json_validated_unchecked()
     }
 
+    /// Splits into status, headers, and body.
     pub fn into_parts(self) -> (StatusCode, HeaderMap, Bytes) {
         (self.status, self.headers, self.body)
     }

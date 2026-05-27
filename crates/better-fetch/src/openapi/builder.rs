@@ -25,6 +25,7 @@ pub struct OpenApiBuilder {
 }
 
 impl OpenApiBuilder {
+    /// Creates a builder with default title and version.
     pub fn new() -> Self {
         Self {
             title: "API".into(),
@@ -34,21 +35,25 @@ impl OpenApiBuilder {
         }
     }
 
+    /// Sets the API title in `info.title`.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
+    /// Sets `info.version`.
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = version.into();
         self
     }
 
+    /// Sets `info.description`.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
+    /// Adds a server URL.
     pub fn server(mut self, url: impl Into<String>) -> Self {
         self.servers.push(OpenApiServer {
             url: url.into(),
@@ -57,6 +62,7 @@ impl OpenApiBuilder {
         self
     }
 
+    /// Adds a server URL with description.
     pub fn server_with_description(
         mut self,
         url: impl Into<String>,
@@ -69,6 +75,9 @@ impl OpenApiBuilder {
         self
     }
 
+    /// Builds an OpenAPI 3.0 document from a [`SchemaRegistry`](crate::schema::SchemaRegistry).
+    ///
+    /// See the `openapi_export` example in the repository for a full workflow.
     pub fn from_registry(&self, registry: &SchemaRegistry) -> OpenApiDocument {
         let mut catalog = SchemaCatalog::default();
         let mut paths: IndexMap<String, IndexMap<String, OpenApiOperation>> = IndexMap::new();

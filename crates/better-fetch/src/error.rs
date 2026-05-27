@@ -1,3 +1,8 @@
+//! Error types and helpers for HTTP, transport, hooks, and retries.
+//!
+//! Most operations return [`crate::Result`]. Use [`Error::status`] and [`Error::body`] on HTTP
+//! failures, and [`Error::api_json`] to parse structured API error payloads.
+
 use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
@@ -6,20 +11,28 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone)]
 #[must_use = "errors must be handled or propagated with `?`"]
 pub enum Error {
+    /// Base URL parsing failed ([`ClientBuilder::base_url`](crate::ClientBuilder::base_url)).
     #[error("invalid base URL: {0}")]
     InvalidBaseUrl(#[from] url::ParseError),
 
+    /// Underlying transport failure (connection, DNS, etc.).
     #[error("transport error: {0}")]
     Transport(String),
 
+    /// Non-success HTTP response (when using throw mode or `send_json`).
     #[error("HTTP {status} {status_text}: {message}")]
     Http {
+        /// HTTP status code.
         status: StatusCode,
+        /// Canonical reason phrase.
         status_text: String,
+        /// Human-readable message.
         message: String,
+        /// Response body when buffered.
         body: Option<Bytes>,
     },
 
+    /// JSON response could not be deserialized (feature `json`).
     #[cfg(feature = "json")]
     #[error("failed to deserialize response body: {message}")]
     Deserialize {
@@ -28,6 +41,7 @@ pub enum Error {
         body: Option<Bytes>,
     },
 
+    /// Response failed garde validation (feature `validate`).
     #[cfg(feature = "validate")]
     #[error("response validation failed: {message}")]
     Validation {
@@ -36,17 +50,26 @@ pub enum Error {
         body: Option<Bytes>,
     },
 
+    /// Request exceeded the configured timeout.
     #[error("request timed out")]
     Timeout,
 
+    /// Request was cancelled via [`CancellationToken`](crate::CancellationToken).
     #[error("request was cancelled")]
     Cancelled,
 
+    /// [`ClientBuilder::build`](crate::ClientBuilder::build) without [`ClientBuilder::base_url`](crate::ClientBuilder::base_url).
     #[error("client base URL is required; call ClientBuilder::base_url")]
     MissingBaseUrl,
 
+    /// Transport retries were exhausted.
     #[error("retries exhausted after {attempts} attempts")]
-    RetryExhausted { attempts: u32, last: Option<String> },
+    RetryExhausted {
+        /// Total attempts made (initial + retries).
+        attempts: u32,
+        /// Stringified last error, when available.
+        last: Option<String>,
+    },
 
     /// Returned from [`on_request`](crate::hooks::Hooks::on_request) or
     /// [`on_response`](crate::hooks::Hooks::on_response) to abort the pipeline.
@@ -54,11 +77,13 @@ pub enum Error {
     #[error("hook error: {0}")]
     Hook(String),
 
+    /// Catch-all for configuration or plugin errors.
     #[error("{0}")]
     Other(String),
 }
 
 impl Error {
+    /// Builds an HTTP error with canonical status text.
     pub fn http(status: StatusCode, message: impl Into<String>, body: Option<Bytes>) -> Self {
         Self::http_with_status_text(
             status,
@@ -68,6 +93,7 @@ impl Error {
         )
     }
 
+    /// Builds an HTTP error with explicit status text.
     pub fn http_with_status_text(
         status: StatusCode,
         status_text: impl Into<String>,
@@ -82,6 +108,7 @@ impl Error {
         }
     }
 
+    /// Returns the HTTP status when this error is response-related.
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Http { status, .. } => Some(*status),
@@ -93,6 +120,7 @@ impl Error {
         }
     }
 
+    /// Returns the canonical status text for [`Error::Http`].
     pub fn status_text(&self) -> Option<&str> {
         match self {
             Self::Http { status_text, .. } => Some(status_text),
@@ -100,6 +128,7 @@ impl Error {
         }
     }
 
+    /// Returns the response body when present on HTTP, deserialize, or validation errors.
     pub fn body(&self) -> Option<&Bytes> {
         match self {
             Self::Http { body, .. } => body.as_ref(),
@@ -139,14 +168,36 @@ impl Error {
         }
     }
 
-    /// Parse the error response body as JSON (for API error payloads).
+    /// Parses the error response body as JSON (for API error payloads).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use better_fetch::Error;
+    /// use http::StatusCode;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Debug, Deserialize, PartialEq)]
+    /// struct ApiError {
+    ///     message: String,
+    /// }
+    ///
+    /// let err = Error::http_with_status_text(
+    ///     StatusCode::BAD_REQUEST,
+    ///     "Bad Request",
+    ///     "bad request",
+    ///     Some(bytes::Bytes::from_static(br#"{"message":"invalid"}"#)),
+    /// );
+    /// let api: ApiError = err.api_json().unwrap();
+    /// assert_eq!(api.message, "invalid");
+    /// ```
     #[cfg(feature = "json")]
     pub fn api_json<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
         let body = self.body()?;
         serde_json::from_slice(body).ok()
     }
 
-    /// Parse and validate the error response body (feature `validate`).
+    /// Parses and validates the error response body (feature `validate`).
     #[cfg(feature = "validate")]
     pub fn api_json_validated<T>(&self) -> Option<T>
     where

@@ -12,10 +12,12 @@ pub struct ReqwestBackend {
 }
 
 impl ReqwestBackend {
+    /// Creates a backend that uses the given reqwest client.
     pub fn new(client: Client) -> Self {
         Self { client }
     }
 
+    /// Returns the underlying reqwest client.
     pub fn client(&self) -> &Client {
         &self.client
     }

@@ -15,6 +15,9 @@ pub fn reqwest_service(client: reqwest::Client) -> ReqwestHttpService {
 }
 
 /// Builds a type-erased transport stack from a reqwest client and a configuration closure.
+///
+/// Pass the result to [`ClientBuilder::http_service_boxed`](crate::ClientBuilder::http_service_boxed)
+/// or use [`ClientBuilder::transport_stack`](crate::ClientBuilder::transport_stack).
 pub fn build<F>(client: reqwest::Client, configure: F) -> BoxHttpService
 where
     F: FnOnce(ReqwestHttpService) -> BoxHttpService,
@@ -24,6 +27,7 @@ where
 
 /// Extension trait to box a configured service stack.
 pub trait IntoBoxHttpService: Sized {
+    /// Boxes `self` as [`BoxHttpService`].
     fn into_box(self) -> BoxHttpService;
 }
 
