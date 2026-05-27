@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-27
+
+### Added
+
+- **Rustdoc** — module-level docs for `client`, `request`, `response`, `endpoint`, `retry`, `auth`, `backend`, `error`, and `plugins`; expanded docs on public API types, methods, and fields.
+- **Rustdoc examples** — 14 doctests on the crate root, `Client` / `ClientBuilder`, `RequestBuilder::send` / `send_json`, typed `Endpoint`, `RetryPolicy`, hooks, `Error::api_json`, auth, cancellation, mock `HttpBackend`, custom `json_parser`, and `transport_stack` (feature `tower`).
+- **Crate root** — feature table, request flow overview, and quick-start example on [docs.rs](https://docs.rs/better-fetch).
+
+### Changed
+
+- **`RetryPolicy::max_attempts`** — now public (documents retry semantics).
+- **docs.rs coverage** — documented items raised from ~30% to ~95% (default features).
+
 ## [0.2.2] - 2026-05-27
 
 ### Fixed
@@ -92,6 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.2.3]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.0
