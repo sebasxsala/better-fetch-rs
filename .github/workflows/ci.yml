@@ -26,5 +26,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Check minimal feature sets
+        run: |
+          cargo check -p better-fetch --no-default-features --features json,rustls-tls
+          cargo check -p better-fetch --no-default-features --features json,native-tls
+          cargo check -p better-fetch --no-default-features --features multipart,rustls-tls
+
       - name: Tests
         run: cargo test --all-features

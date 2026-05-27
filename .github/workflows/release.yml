@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Publish & GitHub Release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check minimal feature sets
+        run: |
+          cargo check -p better-fetch --no-default-features --features json,rustls-tls
+          cargo check -p better-fetch --no-default-features --features json,native-tls
+          cargo check -p better-fetch --no-default-features --features multipart,rustls-tls
+
+      - name: Tests
+        run: cargo test --all-features
+
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          body="$(awk -v ver="$version" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[" ver "\\]") { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md)"
+          if [ -z "$body" ]; then
+            echo "No CHANGELOG section for version $version"
+            exit 1
+          fi
+          {
+            echo "body<<EOF"
+            echo "$body"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish better-fetch-macros
+        run: cargo publish -p better-fetch-macros --wait
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Publish better-fetch
+        run: cargo publish -p better-fetch --wait
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Publish typed-fetch
+        run: cargo publish -p typed-fetch --wait
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Publish api-fetch
+        run: cargo publish -p api-fetch --wait
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.body }}
