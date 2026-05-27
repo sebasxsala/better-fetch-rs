@@ -96,12 +96,16 @@ impl SchemaRegistry {
         E: crate::Endpoint,
         Req: JsonSchema + 'static,
         Res: JsonSchema + 'static,
+        E::Params: JsonSchema,
+        E::Query: JsonSchema,
     {
-        self.register_endpoint(
+        self.register_full(
             E::PATH,
             E::METHOD,
             Some(schemars::schema_for!(Req)),
             Some(schemars::schema_for!(Res)),
+            Some(schemars::schema_for!(E::Query)),
+            Some(schemars::schema_for!(E::Params)),
         );
     }
 

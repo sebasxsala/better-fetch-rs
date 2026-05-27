@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
 | `reqwest`, `json`, `rustls-tls` (default) | Async client, JSON, TLS |
 | `native-tls` | Platform TLS |
 | `blocking`, `multipart`, `cookies` | Passed through to reqwest |
-| `schema` / `openapi` | `schemars` registry and minimal OpenAPI document builder |
+| `schema` / `openapi` | `schemars` registry, strict routes, and OpenAPI 3.0 export (`components.schemas`, request/response bodies, parameters) |
 | `tower` / `tower-http` | Tower `Service` transport stack (`better_fetch::tower`) |
 | `validate` | Response validation with `garde` (`send_json_validated`) |
 | `macros` | Reserved `better-fetch-macros` crate |
@@ -85,6 +85,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full 0.1.0 scope.
 
 ```bash
 cargo run -p better-fetch --example basic
+cargo run -p better-fetch --example openapi_export --features openapi
 cargo run -p better-fetch --example retry
 cargo test -p better-fetch
 cargo test -p better-fetch --features openapi,validate,tower,json

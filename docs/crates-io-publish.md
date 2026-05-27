@@ -9,4 +9,4 @@ cargo publish -p typed-fetch
 cargo publish -p api-fetch
 ```
 
-`typed-fetch` and `api-fetch` re-export `better-fetch` at the same version (`0.1.1`).
+`typed-fetch` and `api-fetch` re-export `better-fetch` at the same version (`0.1.2`).

@@ -79,7 +79,10 @@ pub use retry::{default_should_retry, RetryPolicy, ShouldRetryFn};
 pub use schema::{EndpointSchema, SchemaRegistry};
 
 #[cfg(feature = "openapi")]
-pub use openapi::{OpenApiBuilder, OpenApiDocument};
+pub use openapi::{
+    OpenApiBuilder, OpenApiComponents, OpenApiDocument, OpenApiInfo, OpenApiOperation, OpenApiSchemaRef,
+    OpenApiServer,
+};
 
 #[cfg(feature = "tower")]
 pub use tower::{BoxHttpService, ReqwestHttpService, ServiceBackend};

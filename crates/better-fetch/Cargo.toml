@@ -149,3 +149,8 @@ required-features = ["validate"]
 name = "tower_stack"
 path = "../../examples/tower_stack.rs"
 required-features = ["tower", "json"]
+
+[[example]]
+name = "openapi_export"
+path = "../../examples/openapi_export.rs"
+required-features = ["openapi"]

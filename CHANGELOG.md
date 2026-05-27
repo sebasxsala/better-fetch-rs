@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-27
+
+### Changed
+
+- **`openapi` feature** — `OpenApiBuilder` emits full OpenAPI 3.0 JSON: `components.schemas` (from schemars `RootSchema`), `requestBody` and response `content` with `$ref`, path/query `parameters`, `:param` → `{param}` paths, optional `servers`, and `OpenApiDocument::to_json` / `to_json_pretty`.
+- **`register_typed`** — also registers `Endpoint::Query` and `Endpoint::Params` when they implement `JsonSchema`.
+
+### Added
+
+- Example `openapi_export` (`cargo run -p better-fetch --example openapi_export --features openapi`).
+
 ## [0.1.1] - 2026-05-27
 
 ### Fixed
@@ -43,5 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.1.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.0
