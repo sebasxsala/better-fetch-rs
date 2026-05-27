@@ -7,12 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-05-27
+## [0.2.1] - 2026-05-27
 
 ### Added
 
 - `Response::into_json_with` / `json_with` — single-step `Bytes` → `T` deserialization (ignores client `json_parser`).
-- `Error::hook` / `Error::is_hook` — canonical constructor and matcher for hook failures.
+- `Error::hook` / `Error::is_hook` — canonical constructor and matcher for hook failures (`Error::Hook` already existed in 0.2.0).
+
+### Changed
+
+- **Path parameter encoding** — use the `percent-encoding` crate instead of an inline encoder (same RFC 3986 unreserved set).
+- **Documentation** — custom JSON fast path vs two-step parser, Tower `Buffer` production pattern (`tower_stack`), `ServiceBackend` mutex behavior, full-body buffering limits, `into_*` vs async response methods.
+
+## [0.2.0] - 2026-05-27
+
+### Added
+
 - **Cancellation** — `CancellationToken` (from `tokio-util`), `RequestBuilder::cancellation_token()`, and `Error::Cancelled` with cooperative abort during requests and retry backoff.
 - **Throw mode** — `RequestBuilder::throw_on_error(true)` returns `Err` on non-2xx from `send()` (like upstream `throw: true`).
 - **Form bodies** — `RequestBuilder::form([...])` for `application/x-www-form-urlencoded`.
@@ -30,7 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`HttpBackend::execute`** — takes `HttpRequest` by value; client reuses one built request per attempt (no full clone per retry for byte bodies).
 - **`ClientConfig`** — pre-merges plugin hooks at build time (`merged_hooks`).
 - **Multipart + retry** — automatic retry is rejected with a clear error if a multipart body was used (multipart forms are not cloneable).
-- **Documentation** — custom JSON fast path vs two-step parser, Tower `Buffer` production pattern (`tower_stack`), `ServiceBackend` mutex behavior, full-body buffering limits, `into_*` vs async response methods.
 
 ## [0.1.2] - 2026-05-27
 
@@ -77,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.2.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.1
