@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock
+skills-lock.json
+.idea
+.vscode
+
+# Local upstream snapshot for development (see reference/upstream-better-fetch/NOTICE.md)
+/reference/upstream-src/

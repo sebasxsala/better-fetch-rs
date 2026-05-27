@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/better-fetch",
+    "crates/better-fetch-tower",
+    "crates/better-fetch-macros",
+    "crates/typed-fetch",
+    "crates/api-fetch",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.81"
+version = "0.1.0"
+authors = ["better-fetch contributors"]
+repository = "https://github.com/sebasxsala/better-fetch-rs"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+http = "1"
+bytes = "1"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+wiremock = "0.6"
+schemars = "0.8"
+indexmap = { version = "2", features = ["serde"] }
+tower = "0.5"
+http-body = "1"
+better-fetch-macros = { path = "crates/better-fetch-macros" }
+better-fetch-tower = { path = "crates/better-fetch-tower" }
+garde = { version = "0.22", default-features = false, features = ["derive"] }
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+redundant_clone = "warn"
+needless_collect = "warn"
