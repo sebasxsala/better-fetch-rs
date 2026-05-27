@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-27
+
+### Added
+
+- `Response::into_json_with` / `json_with` — single-step `Bytes` → `T` deserialization (ignores client `json_parser`).
+- `Error::hook` / `Error::is_hook` — canonical constructor and matcher for hook failures.
+- **Cancellation** — `CancellationToken` (from `tokio-util`), `RequestBuilder::cancellation_token()`, and `Error::Cancelled` with cooperative abort during requests and retry backoff.
+- **Throw mode** — `RequestBuilder::throw_on_error(true)` returns `Err` on non-2xx from `send()` (like upstream `throw: true`).
+- **Form bodies** — `RequestBuilder::form([...])` for `application/x-www-form-urlencoded`.
+- **Multipart** — `RequestBuilder::multipart(form)` behind the `multipart` feature; re-export `better_fetch::multipart` for `reqwest::multipart::Form`.
+- **Typed endpoints** — `EndpointRequestBuilder` via `client.call::<E>()`, with `EndpointParams` / `EndpointQuery` and typed `send_json()`.
+- **Retry** — `Retry-After` header support, jitter on backoff, **408** in default retry codes; `RetryPolicy::Count` keeps `with_should_retry` without converting to linear.
+- **Plugins** — `PreparedRequest` now includes `method` and `headers` in `init` (after auth).
+- **Dependencies** — `indexmap` (stable query order), `tokio-util`, `fastrand` (lightweight).
+- Example `multipart` and integration tests for cancel, throw, form, multipart, query order, and retry edge cases.
+
+### Changed
+
+- **`ClientBuilder::build()`** — requires `.base_url(...)`; returns `Error::MissingBaseUrl` instead of defaulting to `http://localhost` (**breaking**).
+- **Query parameters** — stored in `IndexMap` so URL query strings follow insertion order.
+- **`HttpBackend::execute`** — takes `HttpRequest` by value; client reuses one built request per attempt (no full clone per retry for byte bodies).
+- **`ClientConfig`** — pre-merges plugin hooks at build time (`merged_hooks`).
+- **Multipart + retry** — automatic retry is rejected with a clear error if a multipart body was used (multipart forms are not cloneable).
+- **Documentation** — custom JSON fast path vs two-step parser, Tower `Buffer` production pattern (`tower_stack`), `ServiceBackend` mutex behavior, full-body buffering limits, `into_*` vs async response methods.
+
 ## [0.1.2] - 2026-05-27
 
 ### Changed
@@ -43,10 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Endpoint` trait and `client.call::<E>()` for typed routes.
 - `HttpBackend` abstraction with reqwest implementation and `ClientBuilder::backend` for mocks.
 - Error type with HTTP status, `status_text`, response body bytes, and `api_json()` for API error payloads.
-- Optional features: `schema` / `openapi` (registry + minimal OpenAPI builder), `tower` / `tower-http` (transport `Service` stack), `validate` (garde response validation), `macros` (reserved proc-macro crate).
+- Optional features: `schema` / `openapi` (registry + OpenAPI builder), `tower` / `tower-http` (transport `Service` stack), `validate` (garde response validation), `macros` (reserved proc-macro crate).
 - **`typed-fetch`** and **`api-fetch`** — crates.io aliases that re-export `better-fetch`.
-- **`better-fetch-tower`** — optional companion crate for Tower transport integration.
-- **`better-fetch-macros`** — placeholder proc-macro crate for future derives.
 - Workspace examples (`basic`, `typed_endpoint`, `hooks`, `logger_plugin`, `retry`, `auth`, `validated_response`, `tower_stack`).
 - Integration and unit tests (60+ cases) with wiremock.
 
@@ -54,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.2.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.0
