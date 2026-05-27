@@ -1,0 +1,17 @@
+[package]
+name = "api-fetch"
+description = "Alias for better-fetch — typed HTTP client on reqwest (same API, alternate crate name)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+better-fetch = { path = "../better-fetch", version = "0.1.0", default-features = true }
+
+[lints]
+workspace = true
