@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-27
+
+### Changed
+
+- **Typed endpoints (breaking)** — `EndpointRequestBuilder` from `client.call::<E>()` no longer has `.param()` / `.query_pair()`. Use `.params(E::Params)` and `.query(E::Query)` with typed structs (`define_params!`, `impl_serde_endpoint_query!`, or proc-macros). When `E::Params` is not `()`, `.params()` is required before `.send_json()`. Untyped `client.get()` / `.post()` are unchanged.
+- **`Error::Transport`** — now `{ kind: TransportKind, message: String }` instead of a plain `String`. Use [`Error::transport`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#method.transport) or [`Error::transport_message`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#method.transport_message) to construct transport errors.
+- **`Error::RetryExhausted::last`** — now `Option<Box<Error>>` instead of `Option<String>` (preserves structured last failure).
+- **Transport mapping** — `map_transport_error` classifies reqwest failures into [`TransportKind`](https://docs.rs/better-fetch/latest/better_fetch/enum.TransportKind.html) (`Connect`, `Body`, `Decode`, `Redirect`, `Request`, `Builder`, `Upgrade`, `Other`) in addition to the existing `Timeout` variant.
+
+### Added
+
+- **`define_params!`**, extended **`endpoint!`**, **`impl_serde_endpoint_query!`** for typed path/query without proc-macros.
+- **Type-state builder** — `NeedsParams` vs `Ready` on `EndpointRequestBuilder`.
+- **Proc-macros** (feature `macros`) — `EndpointParamsDerive`, `EndpointQueryDerive` with path validation.
+- **`serialize_to_query_map`** — serde structs to query params for OpenAPI/runtime parity.
+- **Streaming API** — `RequestBuilder::send_stream`, `StreamingResponse`, `HttpBackend::execute_stream`, and `BodyStream` for incremental response bodies. `max_response_bytes` ends the stream after `Error::BodyTooLarge` (no infinite error loop).
+- **Streaming hooks** — `on_response_stream`, `on_success_stream`, `StreamingResponseContext`, `StreamingResponseMeta`, `StreamingSuccessContext` (metadata only; buffered `on_response` / `on_success` are not called on the streaming path).
+- **Streaming retry peek** — custom `RetryPolicy::with_should_retry` on `send_stream` can inspect up to `retry_body_peek_bytes` (default 64 KiB) of the body; status-only retries do not read the body.
+- **Streaming cancellation** — `CancelBodyStream` registers the cancellation waker while the inner body read is pending.
+- **Tower streaming** — `ServiceBackend` delegates `execute_stream` to a `ReqwestBackend` sharing the same `reqwest::Client` as the Tower stack (`transport_stack` wires this automatically).
+- **`Error::BodyTooLarge`** — when a streaming response exceeds `max_response_bytes`.
+- **`ClientBuilder::max_response_bytes`** / **`RequestBuilder::max_response_bytes`** — optional size cap on the streaming path.
+- **`ClientBuilder::retry_body_peek_bytes`** / **`RequestBuilder::retry_body_peek_bytes`** — cap for retry predicate body peek on streams.
+- **Example** — `examples/streaming.rs`; tests `streaming_tests` and `streaming_tower_tests` (feature `tower`).
+- **docs.rs** — `package.metadata.docs.rs` with `all-features`, `doc_cfg`, and rustdoc example scraping.
+- **`TransportKind`** — public enum for transport failure categories.
+- **`Error::transport_kind`**, **`Error::transport_detail`**, **`Error::is_transport`**, **`Error::is_timeout`**, **`Error::retry_exhausted_last`**.
+- **CI** — minimal feature-set checks (`json` + `rustls-tls` / `native-tls`, `multipart`).
+- **Release automation** — `.github/workflows/release.yml` (tag `v*` → crates.io trusted publishing + GitHub Release from `CHANGELOG.md`).
+
+### Migration (0.2.x → 0.3.0)
+
+- **`client.call::<E>()`** — replace `.param("id", n)` with `.params(E::Params { ... })` (or `define_params!` / proc-macros). See README typed endpoint section.
+- **`send()` / `send_json()`** — unchanged; still fully buffered.
+- **Custom `HttpBackend`** — implement `execute_stream` (return an error if unsupported).
+- **Tower `ServiceBackend`** — implement `execute_stream` on custom backends; with `transport_stack`, streaming uses the shared reqwest client (Tower middleware does not apply to `send_stream`).
+
 ## [0.2.3] - 2026-05-27
 
 ### Added
@@ -105,6 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.3.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.3.0
 [0.2.3]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.1
