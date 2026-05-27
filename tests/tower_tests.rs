@@ -125,6 +125,63 @@ async fn concurrency_limit_layer_with_wiremock() -> Result<()> {
 }
 
 #[tokio::test]
+async fn service_backend_allows_concurrent_transport_calls() -> Result<()> {
+    let server = MockServer::start().await;
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("ok")
+                .set_delay(Duration::from_millis(100)),
+        )
+        .mount(&server)
+        .await;
+
+    let stack = stack::build(reqwest::Client::new(), |inner| {
+        ServiceBuilder::new()
+            .map_response(move |res: HttpResponse| {
+                IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+                res
+            })
+            .map_request(move |req: HttpRequest| {
+                let n = IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+                let max = MAX_SEEN.load(Ordering::SeqCst);
+                if n > max {
+                    MAX_SEEN.store(n, Ordering::SeqCst);
+                }
+                req
+            })
+            .service(inner)
+            .into_box()
+    });
+
+    let client = Arc::new(
+        ClientBuilder::new()
+            .base_url(server.uri())?
+            .http_service_boxed(stack)
+            .build()?,
+    );
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let c = client.clone();
+        handles.push(tokio::spawn(async move { c.get("/slow").send().await }));
+    }
+    for h in handles {
+        h.await.unwrap()?;
+    }
+
+    assert!(
+        MAX_SEEN.load(Ordering::SeqCst) >= 2,
+        "ServiceBackend should allow concurrent transport I/O without a global mutex"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn max_in_flight_core_semaphore() -> Result<()> {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -150,6 +207,15 @@ async fn max_in_flight_core_semaphore() -> Result<()> {
                 headers: http::HeaderMap::new(),
                 body: Bytes::from_static(b"ok"),
             })
+        }
+
+        async fn execute_stream(
+            &self,
+            _request: HttpRequest,
+        ) -> Result<better_fetch::backend::HttpStreamingResponse> {
+            Err(Error::Other(
+                "streaming not supported in CountingBackend".into(),
+            ))
         }
     }
 

@@ -1,4 +1,4 @@
-use better_fetch::{Client, Endpoint, Result};
+use better_fetch::{define_params, endpoint, Client, Endpoint, Result};
 use http::Method;
 use serde::Deserialize;
 
@@ -8,7 +8,14 @@ pub struct Todo {
     pub title: String,
 }
 
-better_fetch::endpoint!(GetTodo, GET, "/todos/:id", Response = Todo);
+define_params!(GetTodoParams for "/todos/:id" { id: u64 });
+endpoint!(
+    GetTodo,
+    GET,
+    "/todos/:id",
+    Response = Todo,
+    Params = GetTodoParams
+);
 
 #[test]
 fn endpoint_constants_match_definition() {
@@ -32,7 +39,11 @@ async fn client_call_uses_endpoint_path() -> Result<()> {
         .await;
 
     let client = Client::new(server.uri())?;
-    let todo: Todo = client.call::<GetTodo>().param("id", 7).send_json().await?;
+    let todo: Todo = client
+        .call::<GetTodo>()
+        .params(GetTodoParams { id: 7 })
+        .send_json()
+        .await?;
 
     assert_eq!(todo.id, 7);
     Ok(())

@@ -157,7 +157,8 @@ fn build_operation(entry: &EndpointSchema, catalog: &mut SchemaCatalog) -> OpenA
     let mut response_map: IndexMap<String, OpenApiResponse> = IndexMap::new();
     if let Some(response_schema) = &entry.response_schema {
         if !is_null_schema(response_schema) {
-            if let Some(ref_path) = catalog.register(&format!("{prefix}Response"), response_schema) {
+            if let Some(ref_path) = catalog.register(&format!("{prefix}Response"), response_schema)
+            {
                 response_map.insert(
                     "200".into(),
                     OpenApiResponse {
@@ -194,9 +195,6 @@ fn build_operation(entry: &EndpointSchema, catalog: &mut SchemaCatalog) -> OpenA
 
 fn json_content(schema: super::document::OpenApiSchemaRef) -> IndexMap<String, OpenApiMediaType> {
     let mut map = IndexMap::new();
-    map.insert(
-        JSON_CONTENT.into(),
-        OpenApiMediaType { schema },
-    );
+    map.insert(JSON_CONTENT.into(), OpenApiMediaType { schema });
     map
 }

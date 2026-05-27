@@ -1,14 +1,14 @@
-//! Transport stack with Tower layers and a buffered service (feature `tower`).
+//! Transport stack with Tower layers (feature `tower`).
 //!
 //! Run: `cargo run -p better-fetch --example tower_stack --features tower,json`
 //!
-//! Production pattern: wrap the reqwest inner service with [`tower::buffer::Buffer`]
-//! (`Buffer::new` spawns a worker on the Tokio runtime), then stack limits and logging
-//! above it. [`ConcurrencyLimitLayer`] caps in-flight transport calls.
+//! [`ServiceBackend`] clones the boxed stack per request, so concurrent transport calls
+//! run in parallel. Stack [`ConcurrencyLimitLayer`] to cap in-flight wire calls.
 //!
-//! Note: [`better_fetch::tower::ServiceBackend`] still serializes calls with a `Mutex`
-//! around the boxed service. For workloads that do not need Tower layers, the default
-//! reqwest backend avoids that lock.
+//! Optional: wrap the reqwest inner service with [`tower::buffer::Buffer`] when the inner
+//! service is not [`Clone`] or is expensive to clone (`Buffer::new` spawns a worker on
+//! the Tokio runtime). For typical reqwest-backed stacks, `Buffer` is not required for
+//! concurrency — see [`better_fetch::tower::stack::with_buffer`].
 
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
                 tracing::debug!(url = %req.url, "transport");
                 req
             })
-            .map_err(|e: tower::BoxError| Error::Transport(e.to_string()))
+            .map_err(|e: tower::BoxError| Error::transport_message(e.to_string()))
             .service(buffered)
             .into_box()
     });

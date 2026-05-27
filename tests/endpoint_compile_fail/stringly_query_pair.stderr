@@ -1,0 +1,15 @@
+error[E0599]: no method named `query_pair` found for struct `EndpointRequestBuilder<'a, E, S>` in the current scope
+ --> $WORKSPACE/tests/endpoint_compile_fail/stringly_query_pair.rs
+  |
+  |       let _ = client
+  |  _____________-
+  | |         .call::<GetTodo>()
+  | |         .params(GetTodoParams { id: 1 })
+  | |         .query_pair("tag", "a");
+  | |_________-^^^^^^^^^^
+  |
+help: there is a method `query` with a similar name, but with different arguments
+ --> src/endpoint.rs
+  |
+  |     pub fn query(self, query: E::Query) -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -49,11 +49,7 @@ async fn throw_on_error_false_matches_default_send() -> Result<()> {
         .await;
 
     let client = Client::new(server.uri())?;
-    let response = client
-        .get("/x")
-        .throw_on_error(false)
-        .send()
-        .await?;
+    let response = client.get("/x").throw_on_error(false).send().await?;
     assert_eq!(response.status(), 500);
     Ok(())
 }

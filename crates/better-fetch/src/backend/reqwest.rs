@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use reqwest::Client;
 
-use super::exec::send_reqwest;
-use super::{HttpBackend, HttpRequest, HttpResponse};
+use super::exec::{send_reqwest, send_reqwest_stream};
+use super::{HttpBackend, HttpRequest, HttpResponse, HttpStreamingResponse};
 use crate::Result;
 
 /// Reqwest-backed HTTP backend.
@@ -33,5 +33,9 @@ impl Default for ReqwestBackend {
 impl HttpBackend for ReqwestBackend {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
         send_reqwest(&self.client, request).await
+    }
+
+    async fn execute_stream(&self, request: HttpRequest) -> Result<HttpStreamingResponse> {
+        send_reqwest_stream(&self.client, request).await
     }
 }

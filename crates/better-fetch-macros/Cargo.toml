@@ -1,6 +1,6 @@
 [package]
 name = "better-fetch-macros"
-description = "Proc macros for better-fetch (reserved for future use)"
+description = "Proc macros for better-fetch endpoint params and query types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,3 +16,6 @@ proc-macro = true
 workspace = true
 
 [dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

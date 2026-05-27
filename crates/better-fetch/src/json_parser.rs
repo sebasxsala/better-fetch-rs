@@ -50,11 +50,7 @@ pub fn serde_json_parser() -> JsonParserFn {
     json_parser(|body| serde_json::from_slice(body).map_err(|e| e.to_string()))
 }
 
-pub(crate) fn deserialize_error(
-    status: StatusCode,
-    message: String,
-    body: &Bytes,
-) -> Error {
+pub(crate) fn deserialize_error(status: StatusCode, message: String, body: &Bytes) -> Error {
     Error::Deserialize {
         status,
         message,
@@ -68,15 +64,12 @@ pub(crate) fn deserialize<T: DeserializeOwned>(
     parser: Option<&JsonParserFn>,
 ) -> Result<T> {
     match parser {
-        None => serde_json::from_slice(body).map_err(|source| {
-            deserialize_error(status, source.to_string(), body)
-        }),
+        None => serde_json::from_slice(body)
+            .map_err(|source| deserialize_error(status, source.to_string(), body)),
         Some(parse) => {
-            let value = parse(body)
-                .map_err(|message| deserialize_error(status, message, body))?;
-            serde_json::from_value(value).map_err(|source| {
-                deserialize_error(status, source.to_string(), body)
-            })
+            let value = parse(body).map_err(|message| deserialize_error(status, message, body))?;
+            serde_json::from_value(value)
+                .map_err(|source| deserialize_error(status, source.to_string(), body))
         }
     }
 }

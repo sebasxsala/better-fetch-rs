@@ -1,11 +1,50 @@
 //! Error types and helpers for HTTP, transport, hooks, and retries.
 //!
 //! Most operations return [`crate::Result`]. Use [`Error::status`] and [`Error::body`] on HTTP
-//! failures, and [`Error::api_json`] to parse structured API error payloads.
+//! failures, [`Error::transport_kind`] on transport failures, and [`Error::api_json`] to parse
+//! structured API error payloads.
+
+use std::fmt;
 
 use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
+
+/// Classification of underlying transport failures (connection, body, decode, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransportKind {
+    /// Connection failed (TCP/TLS/DNS and similar).
+    Connect,
+    /// Request or response body error.
+    Body,
+    /// Response body decoding error (e.g. decompression).
+    Decode,
+    /// Redirect policy violation.
+    Redirect,
+    /// Error building or sending the request.
+    Request,
+    /// Invalid request configuration.
+    Builder,
+    /// Protocol upgrade failure.
+    Upgrade,
+    /// Unclassified transport failure.
+    Other,
+}
+
+impl fmt::Display for TransportKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect => write!(f, "connect"),
+            Self::Body => write!(f, "body"),
+            Self::Decode => write!(f, "decode"),
+            Self::Redirect => write!(f, "redirect"),
+            Self::Request => write!(f, "request"),
+            Self::Builder => write!(f, "builder"),
+            Self::Upgrade => write!(f, "upgrade"),
+            Self::Other => write!(f, "other"),
+        }
+    }
+}
 
 /// Error type for better-fetch operations.
 #[derive(Debug, Error, Clone)]
@@ -15,9 +54,14 @@ pub enum Error {
     #[error("invalid base URL: {0}")]
     InvalidBaseUrl(#[from] url::ParseError),
 
-    /// Underlying transport failure (connection, DNS, etc.).
-    #[error("transport error: {0}")]
-    Transport(String),
+    /// Underlying transport failure (connection, DNS, body read, etc.).
+    #[error("transport error ({kind}): {message}")]
+    Transport {
+        /// Coarse category aligned with reqwest's `is_*` helpers.
+        kind: TransportKind,
+        /// Human-readable detail (typically from the underlying error's `Display`).
+        message: String,
+    },
 
     /// Non-success HTTP response (when using throw mode or `send_json`).
     #[error("HTTP {status} {status_text}: {message}")]
@@ -58,6 +102,14 @@ pub enum Error {
     #[error("request was cancelled")]
     Cancelled,
 
+    /// Response body exceeded [`ClientBuilder::max_response_bytes`](crate::ClientBuilder::max_response_bytes)
+    /// or a per-request [`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes) limit.
+    #[error("response body exceeded limit of {limit} bytes")]
+    BodyTooLarge {
+        /// Configured maximum response size in bytes.
+        limit: u64,
+    },
+
     /// [`ClientBuilder::build`](crate::ClientBuilder::build) without [`ClientBuilder::base_url`](crate::ClientBuilder::base_url).
     #[error("client base URL is required; call ClientBuilder::base_url")]
     MissingBaseUrl,
@@ -67,8 +119,8 @@ pub enum Error {
     RetryExhausted {
         /// Total attempts made (initial + retries).
         attempts: u32,
-        /// Stringified last error, when available.
-        last: Option<String>,
+        /// Last error before retries were exhausted, when available.
+        last: Option<Box<Error>>,
     },
 
     /// Returned from [`on_request`](crate::hooks::Hooks::on_request) or
@@ -83,6 +135,45 @@ pub enum Error {
 }
 
 impl Error {
+    /// Builds a transport error with an explicit [`TransportKind`].
+    pub fn transport(kind: TransportKind, message: impl Into<String>) -> Self {
+        Self::Transport {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// Builds a transport error with [`TransportKind::Other`].
+    pub fn transport_message(message: impl Into<String>) -> Self {
+        Self::transport(TransportKind::Other, message)
+    }
+
+    /// Returns the transport failure category when this error is [`Error::Transport`].
+    pub fn transport_kind(&self) -> Option<TransportKind> {
+        match self {
+            Self::Transport { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    /// Returns the transport error detail string when this error is [`Error::Transport`].
+    pub fn transport_detail(&self) -> Option<&str> {
+        match self {
+            Self::Transport { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` when this error is [`Error::Transport`].
+    pub fn is_transport(&self) -> bool {
+        matches!(self, Self::Transport { .. })
+    }
+
+    /// Returns `true` when this error is [`Error::Timeout`].
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout)
+    }
+
     /// Builds an HTTP error with canonical status text.
     pub fn http(status: StatusCode, message: impl Into<String>, body: Option<Bytes>) -> Self {
         Self::http_with_status_text(
@@ -145,9 +236,30 @@ impl Error {
         matches!(self, Self::RetryExhausted { .. })
     }
 
+    /// Returns the last error from [`Error::RetryExhausted`] when present.
+    pub fn retry_exhausted_last(&self) -> Option<&Error> {
+        match self {
+            Self::RetryExhausted { last, .. } => last.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Returns `true` when the request was cancelled via [`CancellationToken`](crate::CancellationToken).
     pub fn is_cancelled(&self) -> bool {
         matches!(self, Self::Cancelled)
+    }
+
+    /// Returns `true` when the response body exceeded a configured size limit.
+    pub fn is_body_too_large(&self) -> bool {
+        matches!(self, Self::BodyTooLarge { .. })
+    }
+
+    /// Returns the configured byte limit when this error is [`Error::BodyTooLarge`].
+    pub fn body_too_large_limit(&self) -> Option<u64> {
+        match self {
+            Self::BodyTooLarge { limit } => Some(*limit),
+            _ => None,
+        }
     }
 
     /// Builds a hook failure for [`Hooks::on_request`](crate::hooks::Hooks::on_request) /
@@ -164,7 +276,7 @@ impl Error {
     pub(crate) fn retry_exhausted(attempts: u32, last: Error) -> Self {
         Self::RetryExhausted {
             attempts,
-            last: Some(last.to_string()),
+            last: Some(Box::new(last)),
         }
     }
 
@@ -213,9 +325,36 @@ impl Error {
 
 pub(crate) fn map_transport_error(err: reqwest::Error) -> Error {
     if err.is_timeout() {
-        Error::Timeout
+        return Error::Timeout;
+    }
+
+    let kind = transport_kind_from_reqwest(&err);
+    Error::Transport {
+        kind,
+        message: err.to_string(),
+    }
+}
+
+fn transport_kind_from_reqwest(err: &reqwest::Error) -> TransportKind {
+    #[cfg(not(target_arch = "wasm32"))]
+    if err.is_connect() {
+        return TransportKind::Connect;
+    }
+
+    if err.is_body() {
+        TransportKind::Body
+    } else if err.is_decode() {
+        TransportKind::Decode
+    } else if err.is_redirect() {
+        TransportKind::Redirect
+    } else if err.is_request() {
+        TransportKind::Request
+    } else if err.is_builder() {
+        TransportKind::Builder
+    } else if err.is_upgrade() {
+        TransportKind::Upgrade
     } else {
-        Error::Transport(err.to_string())
+        TransportKind::Other
     }
 }
 
@@ -272,5 +411,20 @@ mod tests {
                 last: Some(_)
             }
         ));
+        assert!(matches!(err.retry_exhausted_last(), Some(Error::Timeout)));
+    }
+
+    #[test]
+    fn transport_helpers() {
+        let err = Error::transport(TransportKind::Connect, "connection refused");
+        assert!(err.is_transport());
+        assert_eq!(err.transport_kind(), Some(TransportKind::Connect));
+        assert_eq!(err.transport_detail(), Some("connection refused"));
+    }
+
+    #[test]
+    fn transport_message_defaults_to_other() {
+        let err = Error::transport_message("tower layer failed");
+        assert_eq!(err.transport_kind(), Some(TransportKind::Other));
     }
 }

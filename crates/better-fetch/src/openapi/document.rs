@@ -46,7 +46,10 @@ pub struct OpenApiComponents {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum OpenApiSchemaRef {
-    Ref { #[serde(rename = "$ref")] ref_path: String },
+    Ref {
+        #[serde(rename = "$ref")]
+        ref_path: String,
+    },
     Inline(serde_json::Value),
 }
 

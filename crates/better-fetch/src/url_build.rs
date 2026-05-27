@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use http::Method;
 use indexmap::IndexMap;
-use percent_encoding::{AsciiSet, utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use url::Url;
 
 use crate::error::Error;
@@ -140,6 +140,26 @@ pub enum QueryValue {
     Scalar(String),
     /// Repeated query key (`key=a&key=b`).
     Array(Vec<String>),
+}
+
+/// Converts a serializable struct into query parameters keyed by serde field names.
+///
+/// Skips `null` values (e.g. `None` fields without `skip_serializing_if`).
+#[cfg(feature = "json")]
+pub fn serialize_to_query_map<T: serde::Serialize>(
+    value: &T,
+) -> Result<IndexMap<String, QueryValue>> {
+    let json = serde_json::to_value(value).map_err(|e| Error::Other(e.to_string()))?;
+    let mut map = IndexMap::new();
+    if let serde_json::Value::Object(obj) = json {
+        for (key, val) in obj {
+            if val.is_null() {
+                continue;
+            }
+            map.insert(key, QueryValue::from_serializable(&val)?);
+        }
+    }
+    Ok(map)
 }
 
 impl QueryValue {

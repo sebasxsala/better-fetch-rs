@@ -172,7 +172,7 @@ impl HttpBackend for FlakyBackend {
     async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
         let n = self.counter.fetch_add(1, Ordering::SeqCst);
         if n < self.fail_until {
-            Err(Error::Transport("simulated transport failure".into()))
+            Err(Error::transport_message("simulated transport failure"))
         } else {
             Ok(HttpResponse {
                 status: StatusCode::OK,
@@ -181,6 +181,15 @@ impl HttpBackend for FlakyBackend {
             })
         }
     }
+
+    async fn execute_stream(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<better_fetch::backend::HttpStreamingResponse> {
+        Err(Error::Other(
+            "streaming not supported in FlakyBackend".into(),
+        ))
+    }
 }
 
 struct AlwaysFailBackend;
@@ -188,7 +197,14 @@ struct AlwaysFailBackend;
 #[async_trait]
 impl HttpBackend for AlwaysFailBackend {
     async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
-        Err(Error::Transport("always fails".into()))
+        Err(Error::transport_message("always fails"))
+    }
+
+    async fn execute_stream(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<better_fetch::backend::HttpStreamingResponse> {
+        Err(Error::transport_message("always fails"))
     }
 }
 

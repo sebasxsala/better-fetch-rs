@@ -1,14 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use tokio::sync::Mutex;
 use tower::util::BoxCloneService;
 use tower::{Service, ServiceExt};
 
 use crate::backend::exec::send_reqwest;
-use crate::backend::{HttpBackend, HttpRequest, HttpResponse};
+use crate::backend::{
+    HttpBackend, HttpRequest, HttpResponse, HttpStreamingResponse, ReqwestBackend,
+};
 use crate::{Error, Result};
 
 /// Type-erased clone HTTP [`Service`](tower::Service).
@@ -60,49 +61,46 @@ impl Service<HttpRequest> for ReqwestHttpService {
 
 /// Wraps a Tower [`Service`] as an [`HttpBackend`].
 ///
-/// Every call through [`HttpBackend::execute`](crate::backend::HttpBackend::execute) acquires
-/// a [`tokio::sync::Mutex`] on the inner service for the full `ready` + `call` sequence,
-/// because Tower services require `&mut self` for [`Service::call`](tower::Service::call).
-/// Concurrent client requests therefore take turns at this lock when using
-/// [`ClientBuilder::http_service`](crate::client::ClientBuilder::http_service),
-/// [`http_service_boxed`](crate::client::ClientBuilder::http_service_boxed), or
-/// [`transport_stack`](crate::client::ClientBuilder::transport_stack).
-///
-/// **Production transport stacks:** wrap your inner service with
-/// [`tower::buffer::Buffer`](https://docs.rs/tower/latest/tower/buffer/struct.Buffer.html)
-/// *before* passing the stack to the client (`Buffer::new` spawns its worker on Tokio)
-/// (see `examples/tower_stack`). That is the recommended pattern for layered Tower
-/// services; the outer mutex here remains a bottleneck until a future release may
-/// replace it with an internal buffer.
-///
-/// When you do not need Tower middleware, prefer the default reqwest
-/// [`HttpBackend`](crate::backend::HttpBackend) (no transport mutex).
+/// Buffered requests use the Tower stack. [`HttpBackend::execute_stream`] delegates to a
+/// separate [`ReqwestBackend`] (same reqwest client as [`ClientBuilder::transport_stack`](crate::ClientBuilder::transport_stack)).
+/// Tower request middleware does not apply to the streaming path.
 pub struct ServiceBackend {
     inner: Arc<Mutex<BoxHttpService>>,
+    streaming: ReqwestBackend,
 }
 
 impl ServiceBackend {
-    /// Wraps a Tower service as an [`HttpBackend`](crate::backend::HttpBackend).
-    pub fn new<S>(service: S) -> Self
+    /// Wraps a Tower service and a reqwest backend used for streaming responses.
+    pub fn new<S>(service: S, streaming: ReqwestBackend) -> Self
     where
         S: Service<HttpRequest, Response = HttpResponse, Error = Error> + Clone + Send + 'static,
         S::Future: Send + 'static,
     {
         Self {
             inner: Arc::new(Mutex::new(BoxHttpService::new(service))),
+            streaming,
         }
     }
 
-    /// Wraps an already-boxed transport stack.
-    pub fn from_box(service: BoxHttpService) -> Self {
+    /// Wraps an already-boxed transport stack with a streaming backend.
+    pub fn from_box(service: BoxHttpService, streaming: ReqwestBackend) -> Self {
         Self {
             inner: Arc::new(Mutex::new(service)),
+            streaming,
         }
     }
 
-    /// Returns the mutex guard around the inner service (for advanced testing).
-    pub async fn lock_inner(&self) -> tokio::sync::MutexGuard<'_, BoxHttpService> {
-        self.inner.lock().await
+    /// Returns a clone of the inner transport stack (for advanced testing).
+    pub fn clone_inner(&self) -> BoxHttpService {
+        self.inner
+            .lock()
+            .expect("ServiceBackend inner mutex poisoned")
+            .clone()
+    }
+
+    /// Returns the reqwest backend used for [`HttpBackend::execute_stream`](crate::backend::HttpBackend::execute_stream).
+    pub fn streaming_backend(&self) -> &ReqwestBackend {
+        &self.streaming
     }
 }
 
@@ -110,6 +108,7 @@ impl Clone for ServiceBackend {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            streaming: self.streaming.clone(),
         }
     }
 }
@@ -117,11 +116,19 @@ impl Clone for ServiceBackend {
 #[async_trait]
 impl HttpBackend for ServiceBackend {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
-        let mut service = self.inner.lock().await;
+        let mut service = self
+            .inner
+            .lock()
+            .expect("ServiceBackend inner mutex poisoned")
+            .clone();
         service
             .ready()
             .await
-            .map_err(|e| Error::Transport(format!("service not ready: {e}")))?;
-        service.call(request.clone()).await
+            .map_err(|e| Error::transport_message(format!("service not ready: {e}")))?;
+        service.call(request).await
+    }
+
+    async fn execute_stream(&self, request: HttpRequest) -> Result<HttpStreamingResponse> {
+        self.streaming.execute_stream(request).await
     }
 }

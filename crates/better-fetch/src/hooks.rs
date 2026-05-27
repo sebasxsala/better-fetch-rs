@@ -1,16 +1,20 @@
 //! Lifecycle hooks for requests and responses.
 //!
-//! [`Hooks::on_request`] and [`Hooks::on_response`] return [`Result`]. To abort the client
-//! pipeline intentionally, return `Err(Error::hook("reason"))`. Other [`Error`] variants
-//! (`Transport`, `Http`, …) are valid when a hook needs to surface a specific failure.
-//! [`Hooks::on_success`], [`Hooks::on_error`], and [`Hooks::on_retry`] cannot return errors.
+//! Buffered responses use [`Hooks::on_response`] / [`Hooks::on_success`]. Streaming responses
+//! ([`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream)) use
+//! [`Hooks::on_response_stream`] / [`Hooks::on_success_stream`] with status and headers only (no body).
+//!
+//! [`Hooks::on_request`] and [`Hooks::on_response`] / [`Hooks::on_response_stream`] return [`Result`].
+//! To abort the client pipeline intentionally, return `Err(Error::hook("reason"))`.
+//! [`Hooks::on_success`], [`Hooks::on_success_stream`], [`Hooks::on_error`], and [`Hooks::on_retry`]
+//! cannot return errors.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http::{HeaderMap, Method};
+use http::{HeaderMap, Method, StatusCode};
 use url::Url;
 
 use crate::error::Error;
@@ -34,13 +38,33 @@ pub struct RequestContext {
     pub retry_attempt: u32,
 }
 
-/// Context after a response is received.
+/// Context after a buffered response is received.
 #[derive(Debug, Clone)]
 pub struct ResponseContext {
     /// Original request context.
     pub request: RequestContext,
     /// Response from the transport (may be mutated by hooks).
     pub response: Response,
+}
+
+/// Context after a streaming response is received (headers only; body not consumed).
+#[derive(Debug, Clone)]
+pub struct StreamingResponseContext {
+    /// Original request context.
+    pub request: RequestContext,
+    /// HTTP status.
+    pub status: StatusCode,
+    /// Response headers (hooks may mutate).
+    pub headers: HeaderMap,
+}
+
+/// Metadata returned from streaming response hooks.
+#[derive(Debug, Clone)]
+pub struct StreamingResponseMeta {
+    /// HTTP status (usually unchanged).
+    pub status: StatusCode,
+    /// Response headers after hook mutations.
+    pub headers: HeaderMap,
 }
 
 /// Context after a successful HTTP response (2xx).
@@ -50,6 +74,17 @@ pub struct SuccessContext {
     pub request: RequestContext,
     /// Successful response.
     pub response: Response,
+}
+
+/// Context after a successful streaming response (2xx, metadata only).
+#[derive(Debug, Clone)]
+pub struct StreamingSuccessContext {
+    /// Original request context.
+    pub request: RequestContext,
+    /// HTTP status.
+    pub status: StatusCode,
+    /// Response headers.
+    pub headers: HeaderMap,
 }
 
 /// Context when an error occurs.
@@ -73,8 +108,19 @@ type ResponseHookFn = Arc<
     dyn Fn(ResponseContext) -> Pin<Box<dyn Future<Output = Result<Response>> + Send>> + Send + Sync,
 >;
 
+type StreamingResponseHookFn = Arc<
+    dyn Fn(
+            StreamingResponseContext,
+        ) -> Pin<Box<dyn Future<Output = Result<StreamingResponseMeta>> + Send>>
+        + Send
+        + Sync,
+>;
+
 type SuccessHookFn =
     Arc<dyn Fn(SuccessContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+type StreamingSuccessHookFn =
+    Arc<dyn Fn(StreamingSuccessContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 type ErrorHookFn =
     Arc<dyn Fn(ErrorContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -87,7 +133,9 @@ type RetryHookFn =
 pub struct Hooks {
     pub(crate) on_request: Vec<RequestHookFn>,
     pub(crate) on_response: Vec<ResponseHookFn>,
+    pub(crate) on_response_stream: Vec<StreamingResponseHookFn>,
     pub(crate) on_success: Vec<SuccessHookFn>,
+    pub(crate) on_success_stream: Vec<StreamingSuccessHookFn>,
     pub(crate) on_error: Vec<ErrorHookFn>,
     pub(crate) on_retry: Vec<RetryHookFn>,
 }
@@ -99,25 +147,6 @@ impl Hooks {
     }
 
     /// Runs before the transport call. Return `Err(Error::hook("…"))` to cancel the request.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use better_fetch::{ClientBuilder, Error, Hooks, Result};
-    ///
-    /// let hooks = Hooks::new().on_request(|ctx| async move {
-    ///     if ctx.url.path().contains("blocked") {
-    ///         return Err(Error::hook("path not allowed"));
-    ///     }
-    ///     Ok(ctx)
-    /// });
-    ///
-    /// let client = ClientBuilder::new()
-    ///     .base_url("https://api.example.com")?
-    ///     .hooks(hooks)
-    ///     .build()?;
-    /// # Ok::<(), better_fetch::Error>(())
-    /// ```
     pub fn on_request<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
@@ -127,7 +156,7 @@ impl Hooks {
         self
     }
 
-    /// Runs after the transport returns. Return `Err(Error::hook("…"))` to fail the request.
+    /// Runs after a buffered transport returns. Return `Err(Error::hook("…"))` to fail the request.
     pub fn on_response<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(ResponseContext) -> Fut + Send + Sync + 'static,
@@ -137,13 +166,38 @@ impl Hooks {
         self
     }
 
-    /// Runs after a successful (2xx) response; cannot abort the pipeline.
+    /// Runs after streaming transport returns, before the body is read.
+    ///
+    /// Use this on [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream) instead of
+    /// [`on_response`](Self::on_response). Return updated [`StreamingResponseMeta`] (e.g. mutate headers).
+    pub fn on_response_stream<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(StreamingResponseContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<StreamingResponseMeta>> + Send + 'static,
+    {
+        self.on_response_stream
+            .push(Arc::new(move |ctx| Box::pin(f(ctx))));
+        self
+    }
+
+    /// Runs after a successful (2xx) buffered response; cannot abort the pipeline.
     pub fn on_success<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(SuccessContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.on_success.push(Arc::new(move |ctx| Box::pin(f(ctx))));
+        self
+    }
+
+    /// Runs after a successful (2xx) streaming response; cannot abort the pipeline.
+    pub fn on_success_stream<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(StreamingSuccessContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_success_stream
+            .push(Arc::new(move |ctx| Box::pin(f(ctx))));
         self
     }
 
@@ -170,7 +224,9 @@ impl Hooks {
     pub(crate) fn merge(mut self, other: Hooks) -> Self {
         self.on_request.extend(other.on_request);
         self.on_response.extend(other.on_response);
+        self.on_response_stream.extend(other.on_response_stream);
         self.on_success.extend(other.on_success);
+        self.on_success_stream.extend(other.on_success_stream);
         self.on_error.extend(other.on_error);
         self.on_retry.extend(other.on_retry);
         self
@@ -196,8 +252,34 @@ impl Hooks {
         Ok(response)
     }
 
+    pub(crate) async fn run_on_response_stream(
+        &self,
+        ctx: StreamingResponseContext,
+    ) -> Result<StreamingResponseMeta> {
+        let request = ctx.request;
+        let mut meta = StreamingResponseMeta {
+            status: ctx.status,
+            headers: ctx.headers,
+        };
+        for hook in &self.on_response_stream {
+            meta = hook(StreamingResponseContext {
+                request: request.clone(),
+                status: meta.status,
+                headers: meta.headers,
+            })
+            .await?;
+        }
+        Ok(meta)
+    }
+
     pub(crate) async fn run_on_success(&self, ctx: SuccessContext) {
         for hook in &self.on_success {
+            hook(ctx.clone()).await;
+        }
+    }
+
+    pub(crate) async fn run_on_success_stream(&self, ctx: StreamingSuccessContext) {
+        for hook in &self.on_success_stream {
             hook(ctx.clone()).await;
         }
     }

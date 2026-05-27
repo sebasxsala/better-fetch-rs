@@ -1,0 +1,5 @@
+error: path `/items/:id` has 1 `:param` segment(s) but the struct has 2 field(s)
+ --> $WORKSPACE/tests/endpoint_macros_compile_fail/extra_param_field.rs
+  |
+  | #[endpoint(path = "/items/:id")]
+  |                   ^^^^^^^^^^^^

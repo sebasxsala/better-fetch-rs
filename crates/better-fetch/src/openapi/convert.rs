@@ -148,10 +148,11 @@ pub(crate) fn parameters_from_schema(
         }
 
         let inline = rewrite_schema_refs(prop_schema);
-        let schema = if let Some(ref_path) = inline_ref_to_component(&inline, catalog, &format!(
-            "{preferred_prefix}{}",
-            capitalize(&name)
-        )) {
+        let schema = if let Some(ref_path) = inline_ref_to_component(
+            &inline,
+            catalog,
+            &format!("{preferred_prefix}{}", capitalize(&name)),
+        ) {
             OpenApiSchemaRef::Ref { ref_path }
         } else {
             OpenApiSchemaRef::Inline(inline)

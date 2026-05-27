@@ -21,4 +21,3 @@ async fn form_sets_urlencoded_body() -> Result<()> {
         .is_success());
     Ok(())
 }
-

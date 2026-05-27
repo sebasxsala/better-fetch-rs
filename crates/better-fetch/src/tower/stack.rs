@@ -51,6 +51,22 @@ pub fn with_concurrency_limit(client: reqwest::Client, max_in_flight: usize) -> 
     })
 }
 
+/// Wraps the reqwest inner service with [`tower::buffer::Buffer`](https://docs.rs/tower/latest/tower/buffer/struct.Buffer.html).
+///
+/// Use when the inner service is not [`Clone`] or cloning it is expensive. `Buffer::new`
+/// spawns a worker on the Tokio runtime; lightweight `Buffer` clones enqueue work to that
+/// worker. This is optional for typical reqwest-backed stacks — [`ServiceBackend`](crate::tower::ServiceBackend)
+/// already clones the boxed stack per request.
+pub fn with_buffer(client: reqwest::Client, capacity: usize) -> BoxHttpService {
+    build(client, |inner| {
+        let buffered = tower::buffer::Buffer::new(inner, capacity);
+        ServiceBuilder::new()
+            .map_err(|e: tower::BoxError| Error::transport_message(e.to_string()))
+            .service(buffered)
+            .into_box()
+    })
+}
+
 /// Logs each transport call at `DEBUG` (wire-level; complements [`LoggerPlugin`](crate::LoggerPlugin)).
 pub fn with_request_logging(client: reqwest::Client) -> BoxHttpService {
     build(client, |inner| {

@@ -6,7 +6,10 @@ use crate::error::Error;
 use crate::Result;
 
 /// Runs `sleep` unless `token` is cancelled first.
-pub(crate) async fn sleep_or_cancel(delay: std::time::Duration, token: Option<&CancellationToken>) -> Result<()> {
+pub(crate) async fn sleep_or_cancel(
+    delay: std::time::Duration,
+    token: Option<&CancellationToken>,
+) -> Result<()> {
     match token {
         None => {
             tokio::time::sleep(delay).await;
@@ -22,10 +25,7 @@ pub(crate) async fn sleep_or_cancel(delay: std::time::Duration, token: Option<&C
 }
 
 /// Executes `fut` unless `token` is cancelled first.
-pub(crate) async fn execute_or_cancel<F, T>(
-    token: Option<&CancellationToken>,
-    fut: F,
-) -> Result<T>
+pub(crate) async fn execute_or_cancel<F, T>(token: Option<&CancellationToken>, fut: F) -> Result<T>
 where
     F: std::future::Future<Output = Result<T>>,
 {

@@ -263,6 +263,15 @@ impl HttpBackend for MockBackend {
     async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
         Ok(self.response.clone())
     }
+
+    async fn execute_stream(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<better_fetch::backend::HttpStreamingResponse> {
+        Err(better_fetch::Error::Other(
+            "streaming not supported in MockBackend".into(),
+        ))
+    }
 }
 
 #[tokio::test]

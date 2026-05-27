@@ -1,6 +1,7 @@
-//! HTTP response wrapper with buffered body.
+//! HTTP response wrapper with a **fully buffered** body.
 //!
-//! Responses are fully buffered in memory. Prefer [`Response::into_json`] and
+//! For incremental reads, use [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream)
+//! and the [`streaming`](crate::streaming) module. Prefer [`Response::into_json`] and
 //! [`Response::into_text`] on hot paths; async methods are aliases without extra I/O.
 
 use bytes::Bytes;
@@ -17,8 +18,8 @@ use crate::Result;
 /// ergonomics in async code (e.g. [`RequestBuilder::send_json`](crate::request::RequestBuilder::send_json)).
 /// Prefer `into_json`, `into_text`, and `into_bytes_checked` on hot paths.
 ///
-/// This model suits typical JSON APIs. It does not stream large downloads; use reqwest
-/// directly when you need chunked bodies or custom size limits.
+/// This model suits typical JSON APIs. For large or chunked bodies, use
+/// [`StreamingResponse`](crate::StreamingResponse) via [`send_stream`](crate::RequestBuilder::send_stream).
 #[derive(Clone)]
 pub struct Response {
     status: StatusCode,

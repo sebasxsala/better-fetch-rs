@@ -2,6 +2,11 @@
 //!
 //! Configure on [`ClientBuilder::retry`](crate::ClientBuilder::retry) or per-request
 //! [`RequestBuilder::retry`](crate::RequestBuilder::retry).
+//!
+//! On [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream), HTTP retries use status
+//! and headers without reading the body. When a custom [`ShouldRetryFn`](crate::ShouldRetryFn) is
+//! set, the client peeks up to [`ClientBuilder::retry_body_peek_bytes`](crate::ClientBuilder::retry_body_peek_bytes)
+//! (default 64 KiB, capped by [`ClientBuilder::max_response_bytes`](crate::ClientBuilder::max_response_bytes) when set).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -172,6 +177,23 @@ impl RetryPolicy {
             Self::Count { .. } => true,
             Self::Linear { jitter, .. } | Self::Exponential { jitter, .. } => *jitter,
         }
+    }
+
+    /// Returns `true` when a custom [`ShouldRetryFn`] predicate is configured.
+    pub(crate) fn has_custom_should_retry(&self) -> bool {
+        matches!(
+            self,
+            Self::Count {
+                should_retry: Some(_),
+                ..
+            } | Self::Linear {
+                should_retry: Some(_),
+                ..
+            } | Self::Exponential {
+                should_retry: Some(_),
+                ..
+            }
+        )
     }
 
     pub(crate) fn should_retry_response(

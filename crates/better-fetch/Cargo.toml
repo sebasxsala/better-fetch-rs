@@ -10,18 +10,17 @@ repository.workspace = true
 readme = "../../README.md"
 
 [features]
-default = ["reqwest", "json", "rustls-tls"]
-reqwest = ["dep:reqwest"]
+default = ["json", "rustls-tls"]
 json = ["dep:serde", "dep:serde_json", "reqwest/json"]
 rustls-tls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
 blocking = ["reqwest/blocking"]
 ## `RequestBuilder::multipart` (reqwest multipart body).
-multipart = ["dep:reqwest", "reqwest/multipart"]
+multipart = ["reqwest/multipart"]
 cookies = ["reqwest/cookies"]
 schema = ["dep:schemars", "dep:serde", "json"]
 openapi = ["schema", "dep:serde", "json"]
-tower = ["dep:tower", "dep:futures-util"]
+tower = ["dep:tower", "rustls-tls"]
 tower-http = ["tower", "dep:tower-http"]
 macros = ["dep:better-fetch-macros"]
 validate = ["json", "dep:garde"]
@@ -41,10 +40,11 @@ bytes = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true, features = ["json", "multipart", "rustls-tls"] }
+reqwest = { workspace = true, default-features = false }
 schemars = { workspace = true, optional = true }
 tower = { workspace = true, optional = true, features = ["util", "limit", "timeout", "buffer"] }
-futures-util = { version = "0.3", optional = true }
+futures-util = { version = "0.3", default-features = true }
+pin-project-lite = "0.2"
 tower-http = { version = "0.6", optional = true, default-features = false, features = ["tower", "trace"] }
 better-fetch-macros = { workspace = true, optional = true }
 garde = { workspace = true, optional = true }
@@ -61,6 +61,13 @@ bytes = { workspace = true }
 garde = { workspace = true, features = ["derive"] }
 tower = { workspace = true, features = ["util", "limit"] }
 proptest = { workspace = true }
+trybuild = "1"
+futures-util = { version = "0.3", default-features = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
 [lints]
 workspace = true
@@ -98,6 +105,10 @@ path = "../../tests/auth_tests.rs"
 [[test]]
 name = "errors_tests"
 path = "../../tests/errors_tests.rs"
+
+[[test]]
+name = "transport_error_tests"
+path = "../../tests/transport_error_tests.rs"
 
 [[test]]
 name = "hooks_tests"
@@ -145,6 +156,16 @@ path = "../../tests/endpoint_typed_tests.rs"
 required-features = ["json"]
 
 [[test]]
+name = "endpoint_macros_tests"
+path = "../../tests/endpoint_macros_tests.rs"
+required-features = ["json", "macros"]
+
+[[test]]
+name = "endpoint_compile_fail"
+path = "../../tests/endpoint_compile_fail.rs"
+required-features = ["json"]
+
+[[test]]
 name = "plugin_init_tests"
 path = "../../tests/plugin_init_tests.rs"
 
@@ -152,6 +173,20 @@ path = "../../tests/plugin_init_tests.rs"
 name = "multipart_tests"
 path = "../../tests/multipart_tests.rs"
 required-features = ["multipart"]
+
+[[test]]
+name = "streaming_tests"
+path = "../../tests/streaming_tests.rs"
+
+[[test]]
+name = "streaming_tower_tests"
+path = "../../tests/streaming_tower_tests.rs"
+required-features = ["tower"]
+
+[[example]]
+name = "streaming"
+path = "../../examples/streaming.rs"
+required-features = ["json"]
 
 [[example]]
 name = "basic"

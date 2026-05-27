@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use better_fetch::backend::{HttpBackend, HttpRequest, HttpResponse};
+use better_fetch::backend::{HttpBackend, HttpRequest, HttpResponse, HttpStreamingResponse};
 use better_fetch::{CancellationToken, Client, ClientBuilder, Error, Result};
 use bytes::Bytes;
 use http::StatusCode;
@@ -26,6 +26,12 @@ impl HttpBackend for SlowBackend {
             body: Bytes::from_static(b"ok"),
         })
     }
+
+    async fn execute_stream(&self, _request: HttpRequest) -> Result<HttpStreamingResponse> {
+        Err(Error::Other(
+            "streaming not supported in SlowBackend".into(),
+        ))
+    }
 }
 
 #[tokio::test]
@@ -42,13 +48,8 @@ async fn cancellation_during_request_returns_cancelled() -> Result<()> {
         .backend(backend.clone())
         .build()?;
 
-    let task = tokio::spawn(async move {
-        client
-            .get("/slow")
-            .cancellation_token(token)
-            .send()
-            .await
-    });
+    let task =
+        tokio::spawn(async move { client.get("/slow").cancellation_token(token).send().await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     cancel.cancel();
@@ -79,16 +80,14 @@ async fn cancellation_during_retry_sleep_returns_cancelled() -> Result<()> {
 
     let client = ClientBuilder::new()
         .base_url(server.uri())?
-        .retry(better_fetch::RetryPolicy::linear(5, Duration::from_secs(10)))
+        .retry(better_fetch::RetryPolicy::linear(
+            5,
+            Duration::from_secs(10),
+        ))
         .build()?;
 
-    let task = tokio::spawn(async move {
-        client
-            .get("/flaky")
-            .cancellation_token(token)
-            .send()
-            .await
-    });
+    let task =
+        tokio::spawn(async move { client.get("/flaky").cancellation_token(token).send().await });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     cancel.cancel();

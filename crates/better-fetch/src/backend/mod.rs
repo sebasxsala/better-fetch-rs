@@ -2,6 +2,9 @@
 //!
 //! The default backend is [`ReqwestBackend`]. Inject a custom [`HttpBackend`] via
 //! [`ClientBuilder::backend`](crate::ClientBuilder::backend) for tests or alternate transports.
+//!
+//! Buffered responses use [`HttpBackend::execute`]. Streaming responses use
+//! [`HttpBackend::execute_stream`] (implemented by [`ReqwestBackend`] by default).
 
 pub(crate) mod exec;
 mod reqwest;
@@ -14,6 +17,7 @@ use http::{HeaderMap, Method, StatusCode};
 use std::time::Duration;
 
 use crate::cancel::CancellationToken;
+use crate::streaming::BodyStream;
 use crate::Result;
 
 #[cfg(feature = "multipart")]
@@ -64,7 +68,7 @@ impl Clone for HttpRequest {
     }
 }
 
-/// Raw HTTP response from a backend.
+/// Raw HTTP response from a backend (fully buffered).
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     /// HTTP status.
@@ -75,9 +79,32 @@ pub struct HttpResponse {
     pub body: Bytes,
 }
 
+/// Raw HTTP response with a streaming body from a backend.
+pub struct HttpStreamingResponse {
+    /// HTTP status.
+    pub status: StatusCode,
+    /// Response headers.
+    pub headers: HeaderMap,
+    /// Response body stream.
+    pub body: BodyStream,
+}
+
+impl std::fmt::Debug for HttpStreamingResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpStreamingResponse")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body", &"<stream>")
+            .finish()
+    }
+}
+
 /// Pluggable HTTP transport used by [`Client`](crate::Client).
 #[async_trait]
 pub trait HttpBackend: Send + Sync {
-    /// Executes one HTTP request and returns the raw response.
+    /// Executes one HTTP request and returns the fully buffered response.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
+
+    /// Executes one HTTP request and returns a streaming response body.
+    async fn execute_stream(&self, request: HttpRequest) -> Result<HttpStreamingResponse>;
 }

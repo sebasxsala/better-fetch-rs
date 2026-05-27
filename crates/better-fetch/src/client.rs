@@ -1,7 +1,11 @@
 //! HTTP client, builder, and shared configuration.
 //!
-//! Start with [`Client::new`] or [`ClientBuilder`], then [`Client::get`] / [`Client::post`] /
-//! [`Client::call`] for typed [`Endpoint`] routes. See [`crate::request`] for per-request options.
+//! Start with [`Client::new`] or [`ClientBuilder`], then:
+//!
+//! - [`Client::get`] / [`Client::post`] — flexible [`RequestBuilder`] (string paths, `.param("id", 1)`).
+//! - [`Client::call`] — typed [`Endpoint`] routes ([`.params()`](EndpointRequestBuilder::params) with structs).
+//!
+//! See [`crate::request`] for per-request options on [`RequestBuilder`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,13 +21,20 @@ use url::Url;
 use crate::auth::Auth;
 use crate::backend::{HttpBackend, HttpBody, HttpRequest, ReqwestBackend};
 use crate::cancel::execute_or_cancel;
-use crate::endpoint::{Endpoint, EndpointRequestBuilder};
+use crate::endpoint::{Endpoint, EndpointParams, EndpointParamsInitial, EndpointRequestBuilder};
 use crate::error::Error;
-use crate::hooks::{ErrorContext, Hooks, RequestContext, ResponseContext, SuccessContext};
+use crate::hooks::{
+    ErrorContext, Hooks, RequestContext, ResponseContext, StreamingResponseContext,
+    StreamingSuccessContext, SuccessContext,
+};
 use crate::plugin::{PluginRegistry, PreparedRequest};
 use crate::request::RequestBuilder;
 use crate::response::Response;
 use crate::retry::{sleep_or_cancel, RetryPolicy};
+use crate::streaming::{
+    body_stream_from_bytes, drain_body_for_retry, wrap_cancellation, wrap_max_bytes,
+    StreamingResponse, RETRY_BODY_PEEK_DEFAULT,
+};
 use crate::url_build::build_url;
 use crate::Result;
 
@@ -73,6 +84,10 @@ pub struct ClientConfig {
     #[cfg(feature = "json")]
     /// Client-wide custom JSON parser (feature `json`).
     pub json_parser: Option<JsonParserFn>,
+    /// Default maximum response body size for [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream).
+    pub max_response_bytes: Option<u64>,
+    /// Maximum bytes read from a streaming body when evaluating a custom retry predicate.
+    pub retry_body_peek_bytes: u64,
 }
 
 /// Typed HTTP client built on reqwest.
@@ -106,7 +121,10 @@ impl Client {
     }
 
     /// Builds a client with a custom reqwest instance. [`ClientBuilder::base_url`] is required.
-    pub fn with_http_client(reqwest_client: ReqwestClient, base_url: impl AsRef<str>) -> Result<Self> {
+    pub fn with_http_client(
+        reqwest_client: ReqwestClient,
+        base_url: impl AsRef<str>,
+    ) -> Result<Self> {
         ClientBuilder::new()
             .reqwest_client(reqwest_client)
             .base_url(base_url)?
@@ -115,9 +133,49 @@ impl Client {
 
     /// Starts a typed request for [`Endpoint`] `E`.
     ///
-    /// See [`Endpoint`] for an example.
-    pub fn call<E: Endpoint>(&self) -> EndpointRequestBuilder<'_, E> {
-        EndpointRequestBuilder::new(self.request(E::METHOD, E::PATH))
+    /// When `E::Params` is not unit, returns a builder in [`NeedsParams`](crate::NeedsParams) state
+    /// that requires [`.params()`](EndpointRequestBuilder::params) before
+    /// [`.send_json()`](EndpointRequestBuilder::send_json).
+    ///
+    /// For ad-hoc requests with string paths, use [`Self::get`] / [`Self::post`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Endpoint, Result, define_params};
+    /// # use http::Method;
+    /// # use serde::Deserialize;
+    /// define_params!(GetTodoParams for "/todos/:id" { id: u64 });
+    ///
+    /// struct GetTodo;
+    /// impl Endpoint for GetTodo {
+    ///     const METHOD: http::Method = http::Method::GET;
+    ///     const PATH: &'static str = "/todos/:id";
+    ///     type Response = Todo;
+    ///     type Params = GetTodoParams;
+    ///     type Query = ();
+    /// }
+    ///
+    /// # #[derive(Deserialize)]
+    /// # struct Todo { id: u64, title: String }
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let todo = client
+    ///     .call::<GetTodo>()
+    ///     .params(GetTodoParams { id: 1 })
+    ///     .send_json()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn call<E: Endpoint>(
+        &self,
+    ) -> EndpointRequestBuilder<'_, E, <E::Params as EndpointParams>::BuilderState>
+    where
+        E::Params: EndpointParamsInitial<E>,
+    {
+        E::Params::initial(self)
     }
 
     /// Returns a snapshot of this client's configuration.
@@ -176,6 +234,306 @@ impl Client {
             json_parser: None,
             #[cfg(feature = "validate")]
             validate_response: true,
+            max_response_bytes: None,
+            retry_body_peek_bytes: None,
+        }
+    }
+
+    pub(crate) async fn execute_stream(
+        &self,
+        builder: RequestBuilder<'_>,
+    ) -> Result<StreamingResponse> {
+        #[cfg(feature = "json")]
+        let json_parser = builder
+            .json_parser
+            .clone()
+            .or_else(|| self.config.json_parser.clone());
+
+        let built = build_url(
+            &self.config.base_url,
+            &builder.path,
+            &builder.params,
+            &builder.query,
+        )?;
+
+        let mut method = builder.method;
+        if let Some(override_method) = built.method_override {
+            method = override_method;
+        }
+
+        #[cfg(feature = "schema")]
+        if let Some(registry) = &self.config.schema_registry {
+            registry.ensure_route(&builder.path, &method)?;
+        }
+
+        let mut url = built.url;
+        let mut headers = builder.headers;
+        let auth = builder.auth.or_else(|| self.config.auth.clone());
+        if let Some(auth) = auth {
+            auth.apply(&mut headers).await?;
+        }
+
+        let mut prepared = PreparedRequest {
+            url: url.clone(),
+            path: builder.path.clone(),
+            method: method.clone(),
+            headers: headers.clone(),
+        };
+        self.config.plugins.run_init_all(&mut prepared).await?;
+        url = prepared.url;
+        headers = prepared.headers;
+        method = prepared.method;
+
+        let mut req_ctx = RequestContext {
+            url: url.clone(),
+            method: method.clone(),
+            headers: headers.clone(),
+            body: body_for_context(&builder.body),
+            retry_attempt: 0,
+        };
+
+        let merged_hooks = &self.config.merged_hooks;
+        req_ctx = merged_hooks.run_on_request(req_ctx).await?;
+        url = req_ctx.url.clone();
+        headers = req_ctx.headers.clone();
+        method = req_ctx.method.clone();
+
+        let timeout = builder.timeout;
+        let retry_policy = builder.retry.or_else(|| self.config.retry.clone());
+        let throw_on_error = builder.throw_on_error;
+        let cancel = builder.cancellation;
+        let max_response_bytes = builder
+            .max_response_bytes
+            .or(self.config.max_response_bytes);
+        let retry_body_peek_bytes = builder
+            .retry_body_peek_bytes
+            .unwrap_or(self.config.retry_body_peek_bytes);
+
+        let backend = self.backend.clone();
+
+        let _in_flight_permit = match &self.config.max_in_flight {
+            Some(sem) => Some(
+                sem.acquire()
+                    .await
+                    .map_err(|_| Error::Other("max_in_flight semaphore closed".into()))?,
+            ),
+            None => None,
+        };
+
+        let mut attempt = 0u32;
+        let max_attempts = retry_policy.as_ref().map(|p| p.max_attempts()).unwrap_or(0);
+
+        let request_body = builder.body;
+        #[cfg(feature = "multipart")]
+        let mut multipart_body = builder.multipart;
+        #[cfg(feature = "multipart")]
+        let had_multipart = multipart_body.is_some();
+
+        let cancel_ref = cancel.as_ref();
+
+        loop {
+            req_ctx.retry_attempt = attempt;
+
+            #[cfg(feature = "multipart")]
+            if attempt > 0 && had_multipart {
+                return Err(Error::Other(
+                    "automatic retry is not supported with multipart request bodies".into(),
+                ));
+            }
+
+            let http_req = HttpRequest {
+                method: method.clone(),
+                url: url.clone(),
+                headers: headers.clone(),
+                body: request_body.clone(),
+                timeout,
+                cancellation: cancel.clone(),
+                #[cfg(feature = "multipart")]
+                multipart: multipart_body.take(),
+            };
+            let request_url = http_req.url.clone();
+
+            let result = execute_or_cancel(cancel_ref, backend.execute_stream(http_req)).await;
+
+            match result {
+                Ok(http_res) => {
+                    let status = http_res.status;
+                    let headers = http_res.headers.clone();
+                    let peek_limit = max_response_bytes
+                        .map(|m| m.min(retry_body_peek_bytes))
+                        .unwrap_or(retry_body_peek_bytes);
+
+                    let mut body = http_res.body;
+                    if let Some(policy) = retry_policy.as_ref() {
+                        if policy.has_custom_should_retry() {
+                            let peeked = drain_body_for_retry(body, peek_limit).await?;
+                            let stub = Response::new(
+                                status,
+                                headers.clone(),
+                                peeked.clone(),
+                                Some(request_url.clone()),
+                                #[cfg(feature = "json")]
+                                None,
+                            );
+                            if policy.should_retry_response(&stub, false) && attempt < max_attempts
+                            {
+                                let stub = Response::new(
+                                    status,
+                                    headers.clone(),
+                                    bytes::Bytes::new(),
+                                    Some(request_url.clone()),
+                                    #[cfg(feature = "json")]
+                                    None,
+                                );
+                                merged_hooks
+                                    .run_on_retry(ResponseContext {
+                                        request: req_ctx.clone(),
+                                        response: stub,
+                                    })
+                                    .await;
+                                let delay = policy.delay_after_response(attempt, &headers);
+                                attempt += 1;
+                                sleep_or_cancel(delay, cancel_ref).await?;
+                                continue;
+                            }
+                            body = body_stream_from_bytes(peeked);
+                        } else {
+                            let stub = Response::new(
+                                status,
+                                headers.clone(),
+                                bytes::Bytes::new(),
+                                Some(request_url.clone()),
+                                #[cfg(feature = "json")]
+                                None,
+                            );
+                            if policy.should_retry_response(&stub, false) && attempt < max_attempts
+                            {
+                                let stub = Response::new(
+                                    status,
+                                    headers.clone(),
+                                    bytes::Bytes::new(),
+                                    Some(request_url.clone()),
+                                    #[cfg(feature = "json")]
+                                    None,
+                                );
+                                merged_hooks
+                                    .run_on_retry(ResponseContext {
+                                        request: req_ctx.clone(),
+                                        response: stub,
+                                    })
+                                    .await;
+                                let delay = policy.delay_after_response(attempt, &headers);
+                                attempt += 1;
+                                sleep_or_cancel(delay, cancel_ref).await?;
+                                continue;
+                            }
+                        }
+                    }
+
+                    let meta = merged_hooks
+                        .run_on_response_stream(StreamingResponseContext {
+                            request: req_ctx.clone(),
+                            status,
+                            headers,
+                        })
+                        .await?;
+                    let status = meta.status;
+                    let stream_headers = meta.headers;
+
+                    if throw_on_error && !status.is_success() {
+                        let http_err = Error::http_with_status_text(
+                            status,
+                            status.canonical_reason().unwrap_or("request failed"),
+                            status.canonical_reason().unwrap_or("request failed"),
+                            None,
+                        );
+                        merged_hooks
+                            .run_on_error(ErrorContext {
+                                request: req_ctx.clone(),
+                                response: None,
+                                error: http_err.clone(),
+                            })
+                            .await;
+                        return Err(http_err);
+                    }
+
+                    if let Some(limit) = max_response_bytes {
+                        body = wrap_max_bytes(body, limit);
+                    }
+                    if let Some(token) = cancel.clone() {
+                        body = wrap_cancellation(body, token);
+                    }
+
+                    if status.is_success() {
+                        merged_hooks
+                            .run_on_success_stream(StreamingSuccessContext {
+                                request: req_ctx.clone(),
+                                status,
+                                headers: stream_headers.clone(),
+                            })
+                            .await;
+                    }
+
+                    return Ok(StreamingResponse::new(
+                        status,
+                        stream_headers,
+                        body,
+                        Some(request_url),
+                        #[cfg(feature = "json")]
+                        json_parser,
+                    ));
+                }
+                Err(err) => {
+                    if err.is_cancelled() {
+                        merged_hooks
+                            .run_on_error(ErrorContext {
+                                request: req_ctx.clone(),
+                                response: None,
+                                error: err.clone(),
+                            })
+                            .await;
+                        return Err(err);
+                    }
+
+                    let retry_transport = matches!(&err, Error::Transport { .. } | Error::Timeout);
+                    if retry_transport && retry_policy.is_some() && attempt < max_attempts {
+                        merged_hooks
+                            .run_on_retry(ResponseContext {
+                                request: req_ctx.clone(),
+                                response: Response::new(
+                                    http::StatusCode::SERVICE_UNAVAILABLE,
+                                    http::HeaderMap::new(),
+                                    bytes::Bytes::new(),
+                                    Some(request_url.clone()),
+                                    #[cfg(feature = "json")]
+                                    None,
+                                ),
+                            })
+                            .await;
+                        let delay = retry_policy
+                            .as_ref()
+                            .map(|p| p.delay_after_response(attempt, &http::HeaderMap::new()))
+                            .unwrap_or(Duration::from_secs(1));
+                        attempt += 1;
+                        sleep_or_cancel(delay, cancel_ref).await?;
+                        continue;
+                    }
+
+                    merged_hooks
+                        .run_on_error(ErrorContext {
+                            request: req_ctx.clone(),
+                            response: None,
+                            error: err.clone(),
+                        })
+                        .await;
+
+                    if retry_transport && retry_policy.is_some() {
+                        return Err(Error::retry_exhausted(attempt + 1, err));
+                    }
+
+                    return Err(err);
+                }
+            }
         }
     }
 
@@ -367,7 +725,7 @@ impl Client {
                         return Err(err);
                     }
 
-                    let retry_transport = matches!(&err, Error::Transport(_) | Error::Timeout);
+                    let retry_transport = matches!(&err, Error::Transport { .. } | Error::Timeout);
                     if retry_transport && retry_policy.is_some() && attempt < max_attempts {
                         merged_hooks
                             .run_on_retry(ResponseContext {
@@ -422,6 +780,8 @@ pub struct ClientBuilder {
     reqwest_client: Option<ReqwestClient>,
     custom_backend: Option<Arc<dyn HttpBackend>>,
     max_in_flight: Option<usize>,
+    max_response_bytes: Option<u64>,
+    retry_body_peek_bytes: Option<u64>,
     #[cfg(feature = "schema")]
     schema_registry: Option<Arc<SchemaRegistry>>,
     #[cfg(feature = "json")]
@@ -442,6 +802,8 @@ impl ClientBuilder {
             reqwest_client: None,
             custom_backend: None,
             max_in_flight: None,
+            max_response_bytes: None,
+            retry_body_peek_bytes: None,
             #[cfg(feature = "schema")]
             schema_registry: None,
             #[cfg(feature = "json")]
@@ -506,7 +868,7 @@ impl ClientBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// # use better_fetch::{ClientBuilder, HttpBackend, HttpRequest, HttpResponse, Result};
+    /// # use better_fetch::{ClientBuilder, Error, HttpBackend, HttpRequest, HttpResponse, HttpStreamingResponse, Result};
     /// # use async_trait::async_trait;
     /// # use bytes::Bytes;
     /// # use http::StatusCode;
@@ -520,6 +882,12 @@ impl ClientBuilder {
     /// #             headers: Default::default(),
     /// #             body: Bytes::from_static(b"{}"),
     /// #         })
+    /// #     }
+    /// #     async fn execute_stream(
+    /// #         &self,
+    /// #         _req: HttpRequest,
+    /// #     ) -> Result<HttpStreamingResponse> {
+    /// #         Err(Error::Other("streaming not supported".into()))
     /// #     }
     /// # }
     /// # fn example() -> Result<()> {
@@ -546,6 +914,21 @@ impl ClientBuilder {
         self
     }
 
+    /// Maximum response body size (in bytes) for [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream)
+    /// when the request does not set its own limit.
+    pub fn max_response_bytes(mut self, limit: u64) -> Self {
+        self.max_response_bytes = Some(limit);
+        self
+    }
+
+    /// Maximum bytes read from a streaming body when a custom retry predicate is configured.
+    ///
+    /// Defaults to 64 KiB. Capped by [`Self::max_response_bytes`] when that is also set.
+    pub fn retry_body_peek_bytes(mut self, limit: u64) -> Self {
+        self.retry_body_peek_bytes = Some(limit);
+        self
+    }
+
     /// Attach a [`SchemaRegistry`] for strict route validation (feature `schema`).
     #[cfg(feature = "schema")]
     pub fn schema_registry(mut self, registry: Arc<SchemaRegistry>) -> Self {
@@ -563,18 +946,24 @@ impl ClientBuilder {
             + 'static,
         S::Future: Send + 'static,
     {
+        use crate::backend::ReqwestBackend;
         use crate::tower::ServiceBackend;
 
-        self.custom_backend = Some(Arc::new(ServiceBackend::new(service)));
+        let client = self.reqwest_client.clone().unwrap_or_default();
+        let streaming = ReqwestBackend::new(client);
+        self.custom_backend = Some(Arc::new(ServiceBackend::new(service, streaming)));
         self
     }
 
     /// Use a boxed Tower transport stack (feature `tower`).
     #[cfg(feature = "tower")]
     pub fn http_service_boxed(mut self, service: crate::tower::BoxHttpService) -> Self {
+        use crate::backend::ReqwestBackend;
         use crate::tower::ServiceBackend;
 
-        self.custom_backend = Some(Arc::new(ServiceBackend::from_box(service)));
+        let client = self.reqwest_client.clone().unwrap_or_default();
+        let streaming = ReqwestBackend::new(client);
+        self.custom_backend = Some(Arc::new(ServiceBackend::from_box(service, streaming)));
         self
     }
 
@@ -604,11 +993,13 @@ impl ClientBuilder {
     where
         F: FnOnce(crate::tower::ReqwestHttpService) -> crate::tower::BoxHttpService,
     {
+        use crate::backend::ReqwestBackend;
         use crate::tower::ServiceBackend;
 
         let client = self.reqwest_client.clone().unwrap_or_default();
+        let streaming = ReqwestBackend::new(client.clone());
         let stacked = configure(crate::tower::ReqwestHttpService::new(client));
-        self.custom_backend = Some(Arc::new(ServiceBackend::from_box(stacked)));
+        self.custom_backend = Some(Arc::new(ServiceBackend::from_box(stacked, streaming)));
         self
     }
 
@@ -663,9 +1054,7 @@ impl ClientBuilder {
     /// # Ok::<(), better_fetch::Error>(())
     /// ```
     pub fn build(self) -> Result<Client> {
-        let base_url = self
-            .base_url
-            .ok_or(Error::MissingBaseUrl)?;
+        let base_url = self.base_url.ok_or(Error::MissingBaseUrl)?;
 
         let backend: Arc<dyn HttpBackend> = if let Some(b) = self.custom_backend {
             b
@@ -692,6 +1081,10 @@ impl ClientBuilder {
                 schema_registry: self.schema_registry,
                 #[cfg(feature = "json")]
                 json_parser: self.json_parser,
+                max_response_bytes: self.max_response_bytes,
+                retry_body_peek_bytes: self
+                    .retry_body_peek_bytes
+                    .unwrap_or(RETRY_BODY_PEEK_DEFAULT),
             }),
             backend,
         })

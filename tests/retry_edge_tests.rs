@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use better_fetch::{parse_retry_after, Client, ClientBuilder, RetryPolicy, Result};
-use http::{HeaderMap, StatusCode};
+use better_fetch::{parse_retry_after, ClientBuilder, Result, RetryPolicy};
+use http::HeaderMap;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

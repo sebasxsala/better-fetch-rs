@@ -71,6 +71,31 @@ impl Plugin for LoggerPlugin {
                     Ok(ctx)
                 }
             })
+            .on_response_stream({
+                let enabled = self.enabled;
+                let verbose = self.verbose;
+                move |ctx| {
+                    let enabled = enabled;
+                    let verbose = verbose;
+                    async move {
+                        if enabled {
+                            if verbose {
+                                info!(
+                                    status = %ctx.status,
+                                    url = %ctx.request.url,
+                                    "better-fetch stream response"
+                                );
+                            } else {
+                                info!(status = %ctx.status, "better-fetch stream response");
+                            }
+                        }
+                        Ok(crate::hooks::StreamingResponseMeta {
+                            status: ctx.status,
+                            headers: ctx.headers,
+                        })
+                    }
+                }
+            })
             .on_response({
                 let enabled = self.enabled;
                 let verbose = self.verbose;

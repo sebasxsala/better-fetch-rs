@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> $WORKSPACE/tests/endpoint_compile_fail/missing_params.rs
+  |
+  |     assert_ready(client.call::<GetTodo>());
+  |     ------------ ^^^^^^^^^^^^^^^^^^^^^^^^ expected `EndpointRequestBuilder<'_, _, Ready>`, found `EndpointRequestBuilder<'_, GetTodo, ...>`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected struct `EndpointRequestBuilder<'_, _, better_fetch::Ready>`
+             found struct `EndpointRequestBuilder<'_, GetTodo, NeedsParams>`
+note: function defined here
+ --> $WORKSPACE/tests/endpoint_compile_fail/missing_params.rs
+  |
+  | fn assert_ready<E: Endpoint>(_: EndpointRequestBuilder<'_, E, Ready>) {}
+  |    ^^^^^^^^^^^^              ---------------------------------------

@@ -176,7 +176,11 @@ fn openapi_path_and_query_parameters() {
     assert!(doc.paths.contains_key("/todos/{id}"));
 
     let get = &doc.paths["/todos/{id}"]["get"];
-    let names: Vec<_> = get.parameters.iter().map(|p| (p.name.as_str(), p.location.as_str())).collect();
+    let names: Vec<_> = get
+        .parameters
+        .iter()
+        .map(|p| (p.name.as_str(), p.location.as_str()))
+        .collect();
     assert!(names.contains(&("id", "path")));
     assert!(names.contains(&("limit", "query")));
     assert!(names.contains(&("offset", "query")));

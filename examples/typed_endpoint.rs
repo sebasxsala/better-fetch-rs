@@ -1,6 +1,16 @@
-use better_fetch::{Client, Endpoint, Result};
+//! Typed endpoint example — method, path, params, and response bound at compile time.
+//!
+//! Compare with `basic.rs`, which uses the flexible `.get()` API with string paths.
+//!
+//! ```bash
+//! cargo run -p better-fetch --example typed_endpoint --features json
+//! ```
+
+use better_fetch::{define_params, Client, Endpoint, Result};
 use http::Method;
 use serde::Deserialize;
+
+define_params!(GetTodoParams for "/todos/:id" { id: u64 });
 
 struct GetTodo;
 
@@ -8,7 +18,7 @@ impl Endpoint for GetTodo {
     const METHOD: Method = Method::GET;
     const PATH: &'static str = "/todos/:id";
     type Response = Todo;
-    type Params = ();
+    type Params = GetTodoParams;
     type Query = ();
 }
 
@@ -26,7 +36,11 @@ struct Todo {
 async fn main() -> Result<()> {
     let client = Client::new("https://jsonplaceholder.typicode.com")?;
 
-    let todo: Todo = client.call::<GetTodo>().param("id", 1).send_json().await?;
+    let todo: Todo = client
+        .call::<GetTodo>()
+        .params(GetTodoParams { id: 1 })
+        .send_json()
+        .await?;
 
     println!("{todo:#?}");
     Ok(())

@@ -3,11 +3,12 @@
 //! Bridges [`tower::Service`] to [`HttpBackend`](crate::backend::HttpBackend).
 //! Enable with `better-fetch` features `tower` and optionally `tower-http`.
 //!
-//! Custom stacks are wrapped by [`ServiceBackend`], which serializes transport calls with
-//! a mutex. For production, build your stack with [`tower::buffer::Buffer`] and a spawned
-//! worker on the Tokio runtime (see `examples/tower_stack`), and use [`stack`](stack) helpers
-//! to add layers such
-//! as [`ConcurrencyLimitLayer`](stack::ConcurrencyLimitLayer).
+//! Custom stacks are wrapped by [`ServiceBackend`], which clones the boxed service per
+//! request (brief lock only — [`BoxCloneService`] is not [`Sync`]) so concurrent transport
+//! calls can run I/O in parallel. Use [`tower::buffer::Buffer`] in your stack when the inner
+//! in your stack when the inner service is not [`Clone`] or is expensive to clone (see
+//! `examples/tower_stack` and [`stack::with_buffer`](stack::with_buffer)). Use [`stack`](stack)
+//! helpers to add layers such as [`ConcurrencyLimitLayer`](stack::ConcurrencyLimitLayer).
 
 mod service;
 pub mod stack;

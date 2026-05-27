@@ -17,6 +17,7 @@ use crate::client::Client;
 use crate::error::Error;
 use crate::response::Response;
 use crate::retry::RetryPolicy;
+use crate::streaming::StreamingResponse;
 use crate::url_build::QueryValue;
 use crate::Result;
 
@@ -43,6 +44,8 @@ pub struct RequestBuilder<'a> {
     pub(crate) auth: Option<Auth>,
     pub(crate) cancellation: Option<CancellationToken>,
     pub(crate) throw_on_error: bool,
+    pub(crate) max_response_bytes: Option<u64>,
+    pub(crate) retry_body_peek_bytes: Option<u64>,
     #[cfg(feature = "json")]
     pub(crate) json_parser: Option<JsonParserFn>,
     #[cfg(feature = "validate")]
@@ -263,6 +266,48 @@ impl<'a> RequestBuilder<'a> {
     /// ```
     pub async fn send(self) -> Result<Response> {
         self.client.execute(self).await
+    }
+
+    /// Maximum response body size in bytes for this streaming request.
+    ///
+    /// Applies to [`send_stream`](Self::send_stream) only. When a chunk would exceed the limit,
+    /// the stream yields [`Error::BodyTooLarge`](crate::Error::BodyTooLarge).
+    pub fn max_response_bytes(mut self, limit: u64) -> Self {
+        self.max_response_bytes = Some(limit);
+        self
+    }
+
+    /// Overrides the client default for how many bytes may be read when a custom retry predicate runs on a stream.
+    pub fn retry_body_peek_bytes(mut self, limit: u64) -> Self {
+        self.retry_body_peek_bytes = Some(limit);
+        self
+    }
+
+    /// Executes the request and returns a [`StreamingResponse`] without buffering the full body.
+    ///
+    /// Uses [`Hooks::on_request`](crate::Hooks::on_request), [`Hooks::on_response_stream`](crate::Hooks::on_response_stream),
+    /// and [`Hooks::on_success_stream`](crate::Hooks::on_success_stream) (2xx). Buffered
+    /// [`Hooks::on_response`](crate::Hooks::on_response) / [`on_success`](crate::Hooks::on_success) are not called.
+    /// Custom retry predicates may peek up to [`ClientBuilder::retry_body_peek_bytes`](crate::ClientBuilder::retry_body_peek_bytes).
+    /// Cancellation wakes pending body reads via the cancellation token (checked on each stream poll).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Result};
+    /// # use futures_util::StreamExt;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let mut response = client.get("/export").send_stream().await?;
+    /// while let Some(chunk) = response.bytes_stream().next().await {
+    ///     let _chunk = chunk?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_stream(self) -> Result<StreamingResponse> {
+        self.client.execute_stream(self).await
     }
 
     /// Executes the request and deserializes JSON on success (feature `json`).
