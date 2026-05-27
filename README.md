@@ -249,7 +249,7 @@ Every response is read fully into memory (`Bytes`) before you get a `Response`. 
 | `validate` | Response validation with `garde` (`send_json_validated`) |
 | `macros` | Reserved `better-fetch-macros` crate |
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+See [CHANGELOG.md](https://github.com/sebasxsala/better-fetch-rs/blob/main/CHANGELOG.md) for release notes.
 
 ## Examples
 

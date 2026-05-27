@@ -11,7 +11,7 @@ members = [
 edition = "2021"
 license = "MIT"
 rust-version = "1.81"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["better-fetch contributors"]
 repository = "https://github.com/sebasxsala/better-fetch-rs"
 
@@ -35,7 +35,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 fastrand = "2"
 tower = "0.5"
 http-body = "1"
-better-fetch-macros = { path = "crates/better-fetch-macros", version = "0.2.1" }
+better-fetch-macros = { path = "crates/better-fetch-macros", version = "0.2.2" }
 garde = { version = "0.22", default-features = false, features = ["derive"] }
 proptest = "1"
 

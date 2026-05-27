@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-27
+
+### Fixed
+
+- **README on crates.io** — changelog link now points to `main` on GitHub (relative `CHANGELOG.md` 404’d in the published crate readme).
+
 ## [0.2.1] - 2026-05-27
 
 ### Added
@@ -86,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.2.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.1.2
