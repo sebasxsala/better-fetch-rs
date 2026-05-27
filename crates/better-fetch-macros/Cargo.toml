@@ -1,0 +1,18 @@
+[package]
+name = "better-fetch-macros"
+description = "Proc macros for better-fetch (reserved for future use)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = true
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
