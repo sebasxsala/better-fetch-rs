@@ -9,7 +9,7 @@ use reqwest::Client as ReqwestClient;
 use url::Url;
 
 use crate::auth::Auth;
-use crate::backend::{HttpBackend, HttpRequest, HttpResponse, ReqwestBackend};
+use crate::backend::{HttpBackend, HttpRequest, ReqwestBackend};
 use crate::error::Error;
 use crate::hooks::{ErrorContext, Hooks, RequestContext, ResponseContext, SuccessContext};
 use crate::plugin::{PluginRegistry, PreparedRequest};
