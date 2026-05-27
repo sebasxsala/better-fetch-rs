@@ -1,0 +1,151 @@
+[package]
+name = "better-fetch"
+description = "Typed HTTP client layer on top of reqwest — inspired by @better-fetch/fetch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[features]
+default = ["reqwest", "json", "rustls-tls"]
+reqwest = ["dep:reqwest"]
+json = ["dep:serde", "dep:serde_json"]
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
+blocking = ["reqwest/blocking"]
+multipart = ["reqwest/multipart"]
+cookies = ["reqwest/cookies"]
+schema = ["dep:schemars", "dep:serde", "json"]
+openapi = ["schema", "dep:indexmap", "dep:serde", "json"]
+tower = ["dep:tower", "dep:futures-util"]
+tower-http = ["tower", "dep:tower-http"]
+macros = ["dep:better-fetch-macros"]
+validate = ["json", "dep:garde"]
+
+[dependencies]
+tokio = { version = "1", features = ["time", "sync"] }
+base64 = "0.22"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+indexmap = { workspace = true, optional = true }
+tower = { workspace = true, optional = true, features = ["util", "limit", "timeout", "buffer"] }
+futures-util = { version = "0.3", optional = true }
+tower-http = { version = "0.6", optional = true, default-features = false, features = ["tower", "trace"] }
+better-fetch-macros = { workspace = true, optional = true }
+garde = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = { workspace = true }
+http = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+garde = { workspace = true, features = ["derive"] }
+tower = { workspace = true, features = ["util", "limit"] }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "client_tests"
+path = "../../tests/client_tests.rs"
+
+[[test]]
+name = "retry_tests"
+path = "../../tests/retry_tests.rs"
+
+[[test]]
+name = "plugin_tests"
+path = "../../tests/plugin_tests.rs"
+
+[[test]]
+name = "schema_openapi_tests"
+path = "../../tests/schema_openapi_tests.rs"
+required-features = ["openapi"]
+
+[[test]]
+name = "auth_tests"
+path = "../../tests/auth_tests.rs"
+
+[[test]]
+name = "errors_tests"
+path = "../../tests/errors_tests.rs"
+
+[[test]]
+name = "hooks_tests"
+path = "../../tests/hooks_tests.rs"
+
+[[test]]
+name = "validate_tests"
+path = "../../tests/validate_tests.rs"
+required-features = ["validate"]
+
+[[test]]
+name = "tower_tests"
+path = "../../tests/tower_tests.rs"
+required-features = ["tower", "json"]
+
+[[test]]
+name = "endpoint_tests"
+path = "../../tests/endpoint_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "schema_tests"
+path = "../../tests/schema_tests.rs"
+required-features = ["schema"]
+
+[[example]]
+name = "basic"
+path = "../../examples/basic.rs"
+required-features = ["json"]
+
+[[example]]
+name = "typed_endpoint"
+path = "../../examples/typed_endpoint.rs"
+required-features = ["json"]
+
+[[example]]
+name = "hooks"
+path = "../../examples/hooks.rs"
+required-features = ["json"]
+
+[[example]]
+name = "logger_plugin"
+path = "../../examples/logger_plugin.rs"
+required-features = ["json"]
+
+[[example]]
+name = "retry"
+path = "../../examples/retry.rs"
+required-features = ["json"]
+
+[[example]]
+name = "auth"
+path = "../../examples/auth.rs"
+required-features = ["json"]
+
+[[example]]
+name = "validated_response"
+path = "../../examples/validated_response.rs"
+required-features = ["validate"]
+
+[[example]]
+name = "tower_stack"
+path = "../../examples/tower_stack.rs"
+required-features = ["tower", "json"]
