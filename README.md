@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
 | `native-tls` | Platform TLS |
 | `blocking`, `multipart`, `cookies` | Passed through to reqwest |
 | `schema` / `openapi` | `schemars` registry and minimal OpenAPI document builder |
-| `tower` / `tower-http` | Tower `Service` transport stack; see `better-fetch-tower` |
+| `tower` / `tower-http` | Tower `Service` transport stack (`better_fetch::tower`) |
 | `validate` | Response validation with `garde` (`send_json_validated`) |
 | `macros` | Reserved `better-fetch-macros` crate |
 
@@ -97,7 +97,6 @@ cargo test -p better-fetch --features openapi,validate,tower,json
 | [better-fetch](https://crates.io/crates/better-fetch) | Main library |
 | [typed-fetch](https://crates.io/crates/typed-fetch) | Re-export alias |
 | [api-fetch](https://crates.io/crates/api-fetch) | Re-export alias |
-| [better-fetch-tower](https://crates.io/crates/better-fetch-tower) | Tower transport helper |
 | [better-fetch-macros](https://crates.io/crates/better-fetch-macros) | Proc macros (reserved) |
 
 ## License

@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/better-fetch",
-    "crates/better-fetch-tower",
     "crates/better-fetch-macros",
     "crates/typed-fetch",
     "crates/api-fetch",
@@ -12,7 +11,7 @@ members = [
 edition = "2021"
 license = "MIT"
 rust-version = "1.81"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["better-fetch contributors"]
 repository = "https://github.com/sebasxsala/better-fetch-rs"
 
@@ -33,8 +32,7 @@ schemars = "0.8"
 indexmap = { version = "2", features = ["serde"] }
 tower = "0.5"
 http-body = "1"
-better-fetch-macros = { path = "crates/better-fetch-macros", version = "0.1.0" }
-better-fetch-tower = { path = "crates/better-fetch-tower", version = "0.1.0" }
+better-fetch-macros = { path = "crates/better-fetch-macros", version = "0.1.1" }
 garde = { version = "0.22", default-features = false, features = ["derive"] }
 proptest = "1"
 

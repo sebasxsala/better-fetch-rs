@@ -1,8 +1,7 @@
 //! Tower transport integration (`tower` feature).
 //!
 //! Bridges [`tower::Service`] to [`HttpBackend`](crate::backend::HttpBackend).
-//! See also the [`better-fetch-tower`](https://docs.rs/better-fetch-tower) crate for a
-//! standalone dependency on this module.
+//! Enable with `better-fetch` features `tower` and optionally `tower-http`.
 
 mod service;
 pub mod stack;
