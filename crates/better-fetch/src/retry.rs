@@ -33,6 +33,7 @@ pub type ShouldRetryFn = Arc<dyn Fn(&Response) -> bool + Send + Sync>;
 /// assert_eq!(policy.max_attempts(), 2);
 /// ```
 #[derive(Clone)]
+#[must_use = "apply with `ClientBuilder::retry` or `RequestBuilder::retry`"]
 pub enum RetryPolicy {
     /// Shorthand for linear retry with `attempts` retries and a 1 second delay between attempts.
     Count {
@@ -65,7 +66,10 @@ pub enum RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Shorthand: `attempts` retries with 1 second delay and default status codes.
+    /// Shorthand: `attempts` retries with a **fixed 1 second** delay and default status codes.
+    ///
+    /// `Count` does **not** apply jitter. For randomized backoff use [`Self::exponential`]
+    /// (jitter on by default) or [`Self::linear`] with [`Self::with_jitter`](Self::with_jitter)(`true`).
     pub fn count(attempts: u32) -> Self {
         Self::Count {
             attempts,
@@ -95,6 +99,9 @@ impl RetryPolicy {
     }
 
     /// Enables randomized backoff jitter on linear or exponential policies.
+    ///
+    /// No effect on [`RetryPolicy::Count`](Self::Count) — use [`Self::exponential`] for jittered delays.
+    #[must_use = "chain with `ClientBuilder::retry` or `RequestBuilder::retry`"]
     pub fn with_jitter(mut self, jitter: bool) -> Self {
         match &mut self {
             Self::Linear { jitter: j, .. } | Self::Exponential { jitter: j, .. } => *j = jitter,
@@ -104,6 +111,7 @@ impl RetryPolicy {
     }
 
     /// Overrides the default retry predicate (408, 429, 502, 503, 504).
+    #[must_use = "chain with `ClientBuilder::retry` or `RequestBuilder::retry`"]
     pub fn with_should_retry(self, f: ShouldRetryFn) -> Self {
         match self {
             Self::Count { attempts, .. } => Self::Count {

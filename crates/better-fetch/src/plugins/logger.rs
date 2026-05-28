@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{error, info, warn};
+use tracing::{error, info, info_span, warn};
 
 use crate::hooks::{ErrorContext, Hooks};
 use crate::plugin::Plugin;
@@ -58,14 +58,17 @@ impl Plugin for LoggerPlugin {
                 let verbose = verbose;
                 async move {
                     if enabled {
+                        let span = info_span!(
+                            "http.request",
+                            method = %ctx.method,
+                            url = %ctx.url,
+                            retry_attempt = ctx.retry_attempt,
+                        );
+                        let _guard = span.enter();
                         if verbose {
-                            info!(
-                                method = %ctx.method,
-                                url = %ctx.url,
-                                "better-fetch request"
-                            );
+                            info!("better-fetch request");
                         } else {
-                            info!(url = %ctx.url, "better-fetch request");
+                            info!("better-fetch request");
                         }
                     }
                     Ok(ctx)
@@ -79,14 +82,17 @@ impl Plugin for LoggerPlugin {
                     let verbose = verbose;
                     async move {
                         if enabled {
+                            let span = info_span!(
+                                "http.response",
+                                status = %ctx.status,
+                                url = %ctx.request.url,
+                                streaming = true,
+                            );
+                            let _guard = span.enter();
                             if verbose {
-                                info!(
-                                    status = %ctx.status,
-                                    url = %ctx.request.url,
-                                    "better-fetch stream response"
-                                );
+                                info!("better-fetch stream response");
                             } else {
-                                info!(status = %ctx.status, "better-fetch stream response");
+                                info!("better-fetch stream response");
                             }
                         }
                         Ok(crate::hooks::StreamingResponseMeta {
@@ -105,14 +111,17 @@ impl Plugin for LoggerPlugin {
                     async move {
                         if enabled {
                             let status = ctx.response.status();
+                            let span = info_span!(
+                                "http.response",
+                                status = %status,
+                                url = %ctx.request.url,
+                                streaming = false,
+                            );
+                            let _guard = span.enter();
                             if verbose {
-                                info!(
-                                    status = %status,
-                                    url = %ctx.request.url,
-                                    "better-fetch response"
-                                );
+                                info!("better-fetch response");
                             } else {
-                                info!(status = %status, "better-fetch response");
+                                info!("better-fetch response");
                             }
                         }
                         Ok(ctx.response)
@@ -142,9 +151,14 @@ impl Plugin for LoggerPlugin {
                     let enabled = enabled;
                     async move {
                         if enabled {
+                            let status = ctx.response.as_ref().map(|r| r.status().as_u16());
+                            let body_preview = ctx.response_body_preview(256);
                             error!(
                                 error = %ctx.error,
                                 url = %ctx.request.url,
+                                ?status,
+                                body_preview = body_preview.as_deref(),
+                                retry_attempt = ctx.request.retry_attempt,
                                 "better-fetch error"
                             );
                         }

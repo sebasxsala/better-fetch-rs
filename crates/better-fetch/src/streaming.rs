@@ -4,6 +4,7 @@
 //! bodies. The buffered [`Response`](crate::Response) from [`RequestBuilder::send`](crate::RequestBuilder::send)
 //! remains the default for JSON APIs.
 
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -15,9 +16,10 @@ use crate::cancel::CancellationToken;
 use crate::error::Error;
 use crate::response::Response;
 use crate::Result;
+use tokio_util::sync::WaitForCancellationFutureOwned;
 
 /// Byte stream yielding `Result<Bytes>` chunks from the transport.
-pub type BodyStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
+pub type BodyStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync>>;
 
 /// HTTP response with a streaming body.
 ///
@@ -45,8 +47,11 @@ pub struct StreamingResponse {
     headers: HeaderMap,
     url: Option<url::Url>,
     body: BodyStream,
+    max_response_bytes: Option<u64>,
     #[cfg(feature = "json")]
     json_parser: Option<crate::json_parser::JsonParserFn>,
+    #[cfg(feature = "schema-validate")]
+    response_schema: Option<crate::schema_validate::StreamResponseSchemaCtx>,
 }
 
 impl StreamingResponse {
@@ -55,15 +60,22 @@ impl StreamingResponse {
         headers: HeaderMap,
         body: BodyStream,
         url: Option<url::Url>,
+        max_response_bytes: Option<u64>,
         #[cfg(feature = "json")] json_parser: Option<crate::json_parser::JsonParserFn>,
+        #[cfg(feature = "schema-validate")] response_schema: Option<
+            crate::schema_validate::StreamResponseSchemaCtx,
+        >,
     ) -> Self {
         Self {
             status,
             headers,
             url,
             body,
+            max_response_bytes,
             #[cfg(feature = "json")]
             json_parser,
+            #[cfg(feature = "schema-validate")]
+            response_schema,
         }
     }
 
@@ -93,12 +105,7 @@ impl StreamingResponse {
         if self.status.is_success() {
             return Ok(());
         }
-        Err(Error::http_with_status_text(
-            self.status,
-            self.status.canonical_reason().unwrap_or("request failed"),
-            self.status.canonical_reason().unwrap_or("request failed"),
-            None,
-        ))
+        Err(Error::http_error_for_status(self.status, None))
     }
 
     /// Mutable reference to the response body stream.
@@ -124,34 +131,89 @@ impl StreamingResponse {
     /// # }
     /// ```
     pub async fn collect(self) -> Result<Response> {
-        use futures_util::StreamExt;
-
         self.error_for_status()?;
-        let mut body = self.body;
-        let mut buf = BytesMut::new();
-        while let Some(chunk) = body.next().await {
-            let chunk = chunk?;
-            let new_len = buf
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(|| Error::Other("response body length overflow".into()))?;
-            buf.reserve(chunk.len());
-            buf.extend_from_slice(&chunk);
-            debug_assert_eq!(buf.len(), new_len);
-        }
-        Ok(Response::new(
+        let bytes = accumulate_stream(self.body, self.max_response_bytes).await?;
+        let response = Response::new(
             self.status,
             self.headers,
-            buf.freeze(),
+            bytes,
             self.url,
             #[cfg(feature = "json")]
             self.json_parser,
-        ))
+        );
+        #[cfg(feature = "schema-validate")]
+        if let Some(ctx) = self.response_schema {
+            crate::schema_validate::validate_response_if_registered(
+                &ctx.registry,
+                &ctx.route_path,
+                &ctx.method,
+                &response,
+            )?;
+        }
+        Ok(response)
     }
 
     /// Splits into status, headers, and the body stream.
     pub fn into_parts(self) -> (StatusCode, HeaderMap, BodyStream) {
         (self.status, self.headers, self.body)
+    }
+
+    /// Writes the response body to `path`, returning the number of bytes written.
+    ///
+    /// Enforces `max_bytes` when set (same semantics as [`accumulate_stream`](crate::streaming::accumulate_stream)).
+    /// Checks for success status before writing.
+    pub async fn stream_to_file(
+        mut self,
+        path: impl AsRef<Path>,
+        max_bytes: Option<u64>,
+    ) -> Result<u64> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        self.error_for_status()?;
+        let limit = max_bytes.or(self.max_response_bytes);
+        let mut file = tokio::fs::File::create(path.as_ref())
+            .await
+            .map_err(|e| Error::Io(format!("create file: {e}")))?;
+        let mut written: u64 = 0;
+
+        while let Some(chunk) = self.body.next().await {
+            let chunk = chunk?;
+            let chunk_len = u64::try_from(chunk.len())
+                .map_err(|_| Error::Config("chunk size overflow".into()))?;
+            let new_written = written
+                .checked_add(chunk_len)
+                .ok_or_else(|| Error::Config("response body length overflow".into()))?;
+            if let Some(limit) = limit {
+                if new_written > limit {
+                    return Err(Error::BodyTooLarge { limit });
+                }
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| Error::Io(format!("write file: {e}")))?;
+            written = new_written;
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| Error::Io(format!("flush file: {e}")))?;
+        Ok(written)
+    }
+
+    /// Buffers the stream (up to `max_bytes`) and parses `text/event-stream` events.
+    pub async fn read_sse_events(
+        self,
+        max_bytes: Option<u64>,
+    ) -> Result<Vec<crate::sse::SseEvent>> {
+        crate::sse::read_sse_from_bytes(self.body, max_bytes.or(self.max_response_bytes)).await
+    }
+
+    /// Incrementally parses SSE events from the response body as a [`Stream`](futures_util::Stream).
+    ///
+    /// Respects `max_bytes` when set on the request (same as [`Self::collect`]).
+    pub fn sse_events(self) -> crate::sse::SseEventStream {
+        crate::sse::SseEventStream::new(self.body, self.max_response_bytes)
     }
 }
 
@@ -176,12 +238,9 @@ pub(crate) fn wrap_max_bytes(stream: BodyStream, limit: u64) -> BodyStream {
 }
 
 pub(crate) fn wrap_cancellation(stream: BodyStream, token: CancellationToken) -> BodyStream {
-    let cancel = Box::pin(async move {
-        token.cancelled().await;
-    });
     Box::pin(CancelBodyStream {
         inner: stream,
-        cancel,
+        cancelled: token.cancelled_owned(),
     })
 }
 
@@ -189,30 +248,35 @@ pub(crate) fn wrap_cancellation(stream: BodyStream, token: CancellationToken) ->
 pub(crate) const RETRY_BODY_PEEK_DEFAULT: u64 = 64 * 1024;
 
 /// Reads up to `limit` bytes from `body` for retry predicate evaluation.
-pub(crate) async fn drain_body_for_retry(mut body: BodyStream, limit: u64) -> Result<Bytes> {
+pub(crate) async fn drain_body_for_retry(body: BodyStream, limit: u64) -> Result<Bytes> {
+    accumulate_stream(body, Some(limit)).await
+}
+
+/// Accumulates a body stream into a single buffer, optionally enforcing `limit`.
+pub(crate) async fn accumulate_stream(mut body: BodyStream, limit: Option<u64>) -> Result<Bytes> {
     use futures_util::StreamExt;
 
     let mut buf = BytesMut::new();
-    while (buf.len() as u64) < limit {
-        match body.next().await {
-            Some(Ok(chunk)) => {
-                let new_len = buf
-                    .len()
-                    .checked_add(chunk.len())
-                    .ok_or_else(|| Error::Other("response body length overflow".into()))?;
-                if new_len as u64 > limit {
-                    return Err(Error::BodyTooLarge { limit });
-                }
-                buf.extend_from_slice(&chunk);
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk?;
+        let new_len = buf
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| Error::Config("response body length overflow".into()))?;
+        if let Some(limit) = limit {
+            if new_len as u64 > limit {
+                return Err(Error::BodyTooLarge { limit });
             }
-            Some(Err(e)) => return Err(e),
-            None => break,
         }
+        buf.reserve(chunk.len());
+        buf.extend_from_slice(&chunk);
+        debug_assert_eq!(buf.len(), new_len);
     }
     Ok(buf.freeze())
 }
 
-pub(crate) fn body_stream_from_bytes(bytes: Bytes) -> BodyStream {
+/// Creates a single-chunk body stream from bytes.
+pub fn body_stream_from_bytes(bytes: Bytes) -> BodyStream {
     Box::pin(futures_util::stream::once(async move { Ok(bytes) }))
 }
 
@@ -254,7 +318,7 @@ pin_project_lite::pin_project! {
         #[pin]
         inner: BodyStream,
         #[pin]
-        cancel: Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+        cancelled: WaitForCancellationFutureOwned,
     }
 }
 
@@ -263,13 +327,13 @@ impl Stream for CancelBodyStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        if this.cancel.as_mut().poll(cx).is_ready() {
+        if this.cancelled.as_mut().poll(cx).is_ready() {
             return Poll::Ready(Some(Err(Error::Cancelled)));
         }
         match this.inner.poll_next(cx) {
             Poll::Ready(item) => Poll::Ready(item),
             Poll::Pending => {
-                let _ = this.cancel.as_mut().poll(cx);
+                let _ = this.cancelled.as_mut().poll(cx);
                 Poll::Pending
             }
         }

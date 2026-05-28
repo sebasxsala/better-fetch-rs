@@ -7,8 +7,10 @@
 //! [`HttpBackend::execute_stream`] (implemented by [`ReqwestBackend`] by default).
 
 pub(crate) mod exec;
+mod recording;
 mod reqwest;
 
+pub use recording::{RecordedBodyKind, RecordedRequest, RecordingBackend};
 pub use reqwest::ReqwestBackend;
 
 use async_trait::async_trait;
@@ -20,17 +22,52 @@ use crate::cancel::CancellationToken;
 use crate::streaming::BodyStream;
 use crate::Result;
 
+/// Returns `true` when the body cannot be sent again on retry.
+pub(crate) fn body_is_non_replayable(body: &HttpBody) -> bool {
+    matches!(body, HttpBody::Stream(_))
+}
+
 #[cfg(feature = "multipart")]
 use crate::multipart::Form as MultipartForm;
 
 /// Request body encoding for the transport layer.
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub enum HttpBody {
     /// No body.
     #[default]
     Empty,
     /// Raw bytes body.
     Bytes(Bytes),
+    /// Streaming request body (not replayable for automatic retry).
+    Stream(BodyStream),
+}
+
+impl std::fmt::Debug for HttpBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Empty"),
+            Self::Bytes(b) => f.debug_tuple("Bytes").field(b).finish(),
+            Self::Stream(_) => write!(f, "Stream"),
+        }
+    }
+}
+
+impl Clone for HttpBody {
+    /// Clones empty and byte bodies. **Streaming bodies cannot be cloned** and become [`HttpBody::Empty`];
+    /// use move semantics or [`HttpRequest`] without cloning when the body is a stream.
+    fn clone(&self) -> Self {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Bytes(b) => Self::Bytes(b.clone()),
+            Self::Stream(_) => {
+                debug_assert!(
+                    false,
+                    "HttpBody::Stream must not be cloned; body was replaced with Empty"
+                );
+                Self::Empty
+            }
+        }
+    }
 }
 
 /// Prepared HTTP request passed to a backend.

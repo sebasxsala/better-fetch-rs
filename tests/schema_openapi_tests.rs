@@ -13,6 +13,8 @@ impl Endpoint for Health {
     type Response = HealthResponse;
     type Params = ();
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -28,6 +30,8 @@ impl Endpoint for Version {
     type Response = VersionResponse;
     type Params = ();
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

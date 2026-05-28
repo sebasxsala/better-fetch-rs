@@ -19,6 +19,8 @@ impl Endpoint for GetTodo {
     type Response = ();
     type Params = GetTodoParams;
     type Query = TagQuery;
+    type Body = ();
+    type Headers = ();
 }
 
 fn main() {

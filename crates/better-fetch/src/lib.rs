@@ -39,9 +39,13 @@
 //! | `tower` | Tower transport stack via [`ClientBuilder::transport_stack`] (implies `rustls-tls`) |
 //! | `schema` | [`SchemaRegistry`] route metadata |
 //! | `openapi` | OpenAPI 3.0 export from schema registry |
-//! | `validate` | Garde validation on JSON responses |
+//! | `validate` | Garde validation on JSON request/response bodies |
+//! | `schema-validate` | Runtime JSON Schema validation (strict registry: request/response body, query, params) |
+//! | `miette` | [`DiagnosticError`](crate::miette_diagnostic::DiagnosticError) for labeled error reports |
+//! | `otel` | `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry` re-exports |
 //! | `blocking`, `cookies` | Passed through to reqwest |
-//! | `macros` | `#[derive(EndpointParamsDerive)]`, `#[derive(EndpointQueryDerive)]` proc-macros |
+//! | `macros` | `#[derive(Endpoint)]`, `EndpointParamsDerive`, `EndpointQueryDerive` |
+//! | `full` | Common optional features bundled for internal apps |
 //!
 //! See the [repository README](https://github.com/sebasxsala/better-fetch-rs) for full examples.
 //!
@@ -87,6 +91,8 @@
 //!     type Response = Todo;
 //!     type Params = GetTodoParams;
 //!     type Query = ();
+//!     type Body = ();
+//!     type Headers = ();
 //! }
 //!
 //! # #[derive(Deserialize)]
@@ -103,17 +109,24 @@
 //! # }
 //! ```
 
+mod path_params;
 mod url_build;
+
+pub mod api_response;
+pub mod prelude;
+pub mod sse;
 
 pub mod auth;
 pub mod backend;
 pub mod cancel;
 pub mod client;
+mod client_builder;
 pub mod endpoint;
 pub mod error;
 pub mod hooks;
 #[cfg(feature = "json")]
 mod json_parser;
+mod request_pipeline;
 
 pub mod plugin;
 pub mod plugins;
@@ -126,6 +139,14 @@ mod validate_json;
 
 #[cfg(feature = "schema")]
 pub mod schema;
+#[cfg(feature = "schema-validate")]
+pub mod schema_validate;
+
+#[cfg(feature = "miette")]
+pub mod miette_diagnostic;
+
+#[cfg(feature = "otel")]
+pub mod otel;
 
 #[cfg(feature = "openapi")]
 pub mod openapi;
@@ -133,20 +154,25 @@ pub mod openapi;
 #[cfg(feature = "tower")]
 pub mod tower;
 
+#[cfg(feature = "json")]
+pub use api_response::{into_api_result, ApiResponseExt};
 pub use auth::{AsyncTokenProvider, Auth, TokenSource};
 pub use backend::{
-    HttpBackend, HttpBody, HttpRequest, HttpResponse, HttpStreamingResponse, ReqwestBackend,
+    HttpBackend, HttpBody, HttpRequest, HttpResponse, HttpStreamingResponse, RecordedBodyKind,
+    RecordedRequest, RecordingBackend, ReqwestBackend,
 };
 pub use cancel::CancellationToken;
 pub use client::{Client, ClientBuilder, ClientConfig};
 pub use endpoint::{
-    Endpoint, EndpointParams, EndpointParamsInitial, EndpointQuery, EndpointRequestBuilder,
-    NeedsParams, ParamsBuilderState, Ready,
+    DefaultParamsInitial, Endpoint, EndpointBody, EndpointHeaders, EndpointParams,
+    EndpointParamsInitial, EndpointQuery, EndpointRequestBuilder, NeedsBody, NeedsParams,
+    ParamsBuilderState, Ready,
 };
 
 #[cfg(feature = "macros")]
 pub use better_fetch_macros::{
-    EndpointParams as EndpointParamsDerive, EndpointQuery as EndpointQueryDerive,
+    Endpoint as EndpointDerive, EndpointParams as EndpointParamsDerive,
+    EndpointQuery as EndpointQueryDerive,
 };
 pub use error::{Error, TransportKind};
 pub use hooks::{
@@ -161,13 +187,13 @@ pub use request::RequestBuilder;
 #[cfg(feature = "multipart")]
 /// Re-export of [reqwest multipart](https://docs.rs/reqwest/latest/reqwest/multipart/) types (feature `multipart`).
 pub use reqwest::multipart;
-pub use response::Response;
+pub use response::{Response, ResponseBodyKind};
 pub use retry::{default_should_retry, parse_retry_after, RetryPolicy, ShouldRetryFn};
-pub use streaming::{BodyStream, StreamingResponse};
-pub use url_build::QueryValue;
-
 #[cfg(feature = "schema")]
 pub use schema::{EndpointSchema, SchemaRegistry};
+pub use sse::{parse_sse_events, SseDecoder, SseEvent, SseEventStream};
+pub use streaming::{BodyStream, StreamingResponse};
+pub use url_build::{path_param_names, QueryValue};
 
 #[cfg(feature = "openapi")]
 pub use openapi::{
@@ -176,7 +202,16 @@ pub use openapi::{
 };
 
 #[cfg(feature = "tower")]
-pub use tower::{BoxHttpService, ReqwestHttpService, ServiceBackend};
+pub use tower::{
+    BoxHttpService, BoxStreamingHttpService, ReqwestHttpService, ReqwestStreamingHttpService,
+    ServiceBackend,
+};
+
+#[cfg(feature = "miette")]
+pub use miette_diagnostic::DiagnosticError;
+
+#[cfg(feature = "otel")]
+pub use otel::{opentelemetry, opentelemetry_sdk, tracing_opentelemetry};
 
 /// Result alias using [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;

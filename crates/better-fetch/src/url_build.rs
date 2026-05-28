@@ -23,9 +23,15 @@ pub struct BuiltUrl {
     pub method_override: Option<Method>,
 }
 
+/// Returns `:param` segment names in left-to-right path order (ignores an embedded `?query`).
+pub fn path_param_names(path: &str) -> Vec<String> {
+    crate::path_params::path_param_names(path)
+}
+
 /// Build a request URL from base URL, path template, params, and query.
 ///
-/// Query keys are serialized in insertion order ([`IndexMap`]).
+/// Query keys are serialized in insertion order ([`IndexMap`]). A `?foo=bar` suffix on `path`
+/// is merged first; explicit `query` entries override embedded keys.
 pub fn build_url(
     base: &Url,
     path: &str,
@@ -34,9 +40,11 @@ pub fn build_url(
 ) -> Result<BuiltUrl> {
     if path.starts_with("http://") || path.starts_with("https://") {
         let (path_only, method_override) = parse_method_modifier(path);
+        let (path_only, embedded_query) = split_embedded_query(path_only);
         let resolved_path = substitute_params(path_only, params)?;
         let mut url = Url::parse(&resolved_path).map_err(Error::InvalidBaseUrl)?;
-        apply_query(&mut url, query)?;
+        let merged = merge_queries(embedded_query, query);
+        apply_query(&mut url, &merged)?;
         return Ok(BuiltUrl {
             url,
             method_override,
@@ -44,14 +52,55 @@ pub fn build_url(
     }
 
     let (path_only, method_override) = parse_method_modifier(path);
+    let (path_only, embedded_query) = split_embedded_query(path_only);
     let resolved_path = substitute_params(path_only, params)?;
     let mut url = join_path(base, &resolved_path)?;
-    apply_query(&mut url, query)?;
+    let merged = merge_queries(embedded_query, query);
+    apply_query(&mut url, &merged)?;
 
     Ok(BuiltUrl {
         url,
         method_override,
     })
+}
+
+fn split_embedded_query(path: &str) -> (&str, IndexMap<String, QueryValue>) {
+    let Some((path_only, query_str)) = path.split_once('?') else {
+        return (path, IndexMap::new());
+    };
+    (path_only, parse_query_string(query_str))
+}
+
+fn parse_query_string(query_str: &str) -> IndexMap<String, QueryValue> {
+    let mut map = IndexMap::new();
+    for (key, value) in url::form_urlencoded::parse(query_str.as_bytes()) {
+        let key = key.into_owned();
+        let value = value.into_owned();
+        match map.get_mut(&key) {
+            None => {
+                map.insert(key, QueryValue::Scalar(value));
+            }
+            Some(QueryValue::Scalar(prev)) => {
+                let first = prev.clone();
+                map.insert(key, QueryValue::Array(vec![first, value]));
+            }
+            Some(QueryValue::Array(values)) => {
+                values.push(value);
+            }
+        }
+    }
+    map
+}
+
+fn merge_queries(
+    embedded: IndexMap<String, QueryValue>,
+    builder: &IndexMap<String, QueryValue>,
+) -> IndexMap<String, QueryValue> {
+    let mut merged = embedded;
+    for (key, value) in builder {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
 }
 
 fn apply_query(url: &mut Url, query: &IndexMap<String, QueryValue>) -> Result<()> {
@@ -99,11 +148,11 @@ pub fn parse_method_modifier(path: &str) -> (&str, Option<Method>) {
 
 fn substitute_params(path: &str, params: &HashMap<String, String>) -> Result<String> {
     let mut result = path.to_string();
-    for (key, value) in params {
+    for key in path_param_names(path) {
         let placeholder = format!(":{key}");
-        if !result.contains(&placeholder) {
-            continue;
-        }
+        let Some(value) = params.get(&key) else {
+            return Err(Error::MissingPathParam(key));
+        };
         let encoded: Cow<'_, str> = utf8_percent_encode(value, PATH_PARAM_ENCODE).into();
         result = result.replace(&placeholder, encoded.as_ref());
     }
@@ -111,10 +160,8 @@ fn substitute_params(path: &str, params: &HashMap<String, String>) -> Result<Str
     if result.contains(':') {
         for segment in result.split('/') {
             if segment.starts_with(':') {
-                return Err(Error::Other(format!(
-                    "missing path parameter for `{}`",
-                    segment
-                )));
+                let name = segment.trim_start_matches(':');
+                return Err(Error::MissingPathParam(name.to_string()));
             }
         }
     }
@@ -221,7 +268,27 @@ mod tests {
     #[test]
     fn missing_param_errors() {
         let err = build_url(&base(), "/todos/:id", &HashMap::new(), &IndexMap::new()).unwrap_err();
-        assert!(matches!(err, Error::Other(_)));
+        assert!(matches!(err, Error::MissingPathParam(_)));
+    }
+
+    #[test]
+    fn embedded_query_in_path_is_merged() {
+        let built = build_url(
+            &base(),
+            "/search?tag=rust",
+            &HashMap::new(),
+            &IndexMap::new(),
+        )
+        .unwrap();
+        assert_eq!(built.url.query(), Some("tag=rust"));
+    }
+
+    #[test]
+    fn builder_query_overrides_embedded_query() {
+        let mut query = IndexMap::new();
+        query.insert("tag".into(), QueryValue::Scalar("override".into()));
+        let built = build_url(&base(), "/search?tag=rust", &HashMap::new(), &query).unwrap();
+        assert_eq!(built.url.query(), Some("tag=override"));
     }
 
     #[test]

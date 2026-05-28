@@ -132,7 +132,7 @@ async fn resolve_token(source: &TokenSource) -> crate::Result<Option<String>> {
 
 fn set_authorization(headers: &mut HeaderMap, value: String) -> crate::Result<()> {
     let header_value = HeaderValue::from_str(&value)
-        .map_err(|e| crate::error::Error::Other(format!("invalid authorization header: {e}")))?;
+        .map_err(|e| crate::error::Error::InvalidAuthHeader(e.to_string()))?;
     headers.insert(AUTHORIZATION, header_value);
     Ok(())
 }

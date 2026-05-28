@@ -1,0 +1,18 @@
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+  --> $WORKSPACE/tests/endpoint_compile_fail/stringly_query_on_ready.rs
+   |
+   |         .query("page", "1");
+   |          ^^^^^ ------  --- unexpected argument #2 of type `&'static str`
+   |                |
+   |                expected `()`, found `&str`
+   |
+note: method defined here
+  --> src/endpoint.rs
+   |
+   |     pub fn query(self, query: E::Query) -> crate::Result<Self> {
+   |            ^^^^^
+help: remove the extra argument
+   |
+26 -         .query("page", "1");
+26 +         .query(());
+   |

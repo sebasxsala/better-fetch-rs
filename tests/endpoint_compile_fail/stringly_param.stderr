@@ -7,5 +7,10 @@ error[E0599]: no method named `param` found for struct `EndpointRequestBuilder<'
 help: there is a method `params` with a similar name, but with different arguments
  --> src/endpoint.rs
   |
-  |     pub fn params(self, params: E::Params) -> EndpointRequestBuilder<'a, E, Ready> {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | /     pub fn params(
+  | |         self,
+  | |         params: E::Params,
+  | |     ) -> EndpointRequestBuilder<'a, E, ParamsBuilderStateAfter<E>>
+  | |     where
+  | |         E::Body: EndpointBody,
+  | |______________________________^

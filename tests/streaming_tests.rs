@@ -203,7 +203,10 @@ async fn throw_on_error_before_body_read() -> Result<()> {
         .await
         .expect_err("404 should error");
     assert_eq!(err.status(), Some(StatusCode::NOT_FOUND));
-    assert!(err.body().is_none());
+    assert_eq!(
+        err.body().map(|b| std::str::from_utf8(b).unwrap()),
+        Some("not found")
+    );
     Ok(())
 }
 

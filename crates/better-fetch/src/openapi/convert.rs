@@ -94,9 +94,8 @@ pub(crate) fn to_openapi_path(path: &str) -> String {
 }
 
 pub(crate) fn path_param_names(path: &str) -> HashSet<String> {
-    path.split('/')
-        .filter_map(|segment| segment.strip_prefix(':'))
-        .map(str::to_string)
+    crate::path_params::path_param_names(path)
+        .into_iter()
         .collect()
 }
 

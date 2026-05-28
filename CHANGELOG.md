@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-27
+
+### Added
+
+- **Streaming uploads** — `RequestBuilder::body_stream` and `Error::NonReplayableBody` when retry cannot replay the body.
+- **Tower dual stack** — `ClientBuilder::transport_stack` wires separate buffered and streaming transports; use this when middleware must apply to `send_stream()`.
+- **Strict JSON Schema** (feature `schema-validate`) — optional validation of request/response JSON, query, and path params when the registry is strict; stream responses validate on `collect()`.
+- **Garde validation** (feature `validate`) — `json_validated`, `query_validated`, `with_headers_validated` on builders.
+- **Typed endpoint macros** — `#[derive(Endpoint)]` with `#[param]`, `#[query_field]`, `#[query]`, `#[endpoint(register)]`, and `NeedsBody` for POST bodies.
+- **SSE** — incremental `SseDecoder` and `StreamingResponse::sse_events()`.
+- **API helpers** — `into_api_result` / `send_api`, `ResponseBodyKind`, `RecordingBackend` for tests, `better_fetch::prelude`, `RequestBuilder::base_url`.
+- **Features** — `full`, `miette` (`DiagnosticError`), `otel` (OpenTelemetry re-exports for tracing subscribers).
+- **Errors** — `QuerySerialize`, `RequestValidation`, `SchemaValidation`, `InvalidHeaderName` / `InvalidHeaderValue`, `MissingPathParam`, `SchemaRoute`, `Transport::source`, and clearer `Io` / `Config`.
+- **Docs** — [testing](docs/testing.md), [observability](docs/observability.md), [ROADMAP](docs/ROADMAP.md); publishing notes in README.
+
+### Changed
+
+- **Breaking:** typed `.query(...)` and `EndpointQuery::apply_query` return `Result`; serialization errors become `Error::QuerySerialize`.
+- **Breaking:** `ClientConfig::hooks` is private; use `ClientConfig::effective_hooks()`.
+- **Breaking:** `EndpointRequestBuilder` implements `Deref` only (no `DerefMut`); use typed `.query(MyQuery)?` instead of stringly `.query("key", "value")` on ready builders.
+- **Breaking:** `transport_stack` takes `(buffered, streaming)` and returns two boxed services.
+- **Breaking:** `impl Endpoint` requires `Body` and `Headers` associated types (often `()`).
+- **Breaking:** `Error::Transport` carries an optional `source`; `Error::RetryExhausted::last` is `Option<Box<Error>>`.
+- **Hooks on streams** — `on_error` runs for failed `send_stream()` responses even without `throw_on_error`, matching buffered behavior.
+- **`http_service` / `http_service_boxed`** — documented: Tower layers apply to buffered `send()` only; streaming still uses reqwest unless you use `transport_stack`.
+- **`LoggerPlugin`** — richer tracing (`http.request` / `http.response`, retry attempt, error body preview).
+- **Retry** — shared buffered/streaming retry loop; aligned backoff, cancellation, and `throw_on_error` body handling.
+
+### Fixed
+
+- **`on_request` hooks** — changes to `RequestContext::body` are applied to the outgoing request.
+- **`throw_on_error` + `send_stream`** — HTTP errors include a peeked body when possible.
+- **Query in path templates** — `?foo=bar` in the path merges with builder query (builder wins).
+- **Stream limits** — `max_response_bytes` applies to `collect()`, `stream_to_file`, and SSE helpers when set on the client or request.
+
+### Migration (0.3.x → 0.4.0)
+
+- Add `?` after typed `.query(...)`.
+- Replace `config().hooks` with `config().effective_hooks()`.
+- Replace `into_inner()` with `Deref` or delegated builder methods.
+- Do not use stringly `.query("k", "v")` on `client.call::<E>()` after params are set.
+- For Tower on both `send()` and `send_stream()`, use `transport_stack`, not `http_service` alone.
+- Add `type Body = (); type Headers = ();` to manual `Endpoint` impls if missing.
+- Multipart or streaming upload retry may return `Error::NonReplayableBody` instead of a generic error.
+
 ## [0.3.0] - 2026-05-27
 
 ### Changed
@@ -142,6 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.4.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.3.0
 [0.2.3]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.2

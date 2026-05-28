@@ -20,19 +20,34 @@ use crate::retry::RetryPolicy;
 use crate::streaming::StreamingResponse;
 use crate::url_build::QueryValue;
 use crate::Result;
+use url::Url;
 
 #[cfg(feature = "json")]
 use crate::json_parser::JsonParserFn;
+
+/// Parses a header name/value pair for request or client default headers.
+pub(crate) fn parse_request_header(
+    key: impl AsRef<str>,
+    value: impl AsRef<str>,
+) -> Result<(http::HeaderName, http::HeaderValue)> {
+    let name = http::HeaderName::from_bytes(key.as_ref().as_bytes())
+        .map_err(|e| Error::InvalidHeaderName(e.to_string()))?;
+    let value = http::HeaderValue::from_str(value.as_ref())
+        .map_err(|e| Error::InvalidHeaderValue(e.to_string()))?;
+    Ok((name, value))
+}
 
 /// Fluent builder for a single HTTP request.
 ///
 /// By default [`send`](Self::send) returns [`Response`] even on non-2xx status. Use
 /// [`throw_on_error`](Self::throw_on_error)(`true`) to get `Err` from `send`, or use
 /// [`send_json`](Self::send_json) which checks status before deserializing.
+#[must_use = "request builders do nothing until you call `.send().await`, `.send_stream().await`, or similar"]
 pub struct RequestBuilder<'a> {
     pub(crate) client: &'a Client,
     pub(crate) method: Method,
     pub(crate) path: String,
+    pub(crate) base_url: Option<url::Url>,
     pub(crate) params: HashMap<String, String>,
     pub(crate) query: IndexMap<String, QueryValue>,
     pub(crate) headers: HeaderMap,
@@ -76,6 +91,38 @@ impl<'a> RequestBuilder<'a> {
         self
     }
 
+    /// Merges path parameters in iterator order (substitution follows `:segment` order in the path).
+    ///
+    /// Alias for [`params_iter`](Self::params_iter); prefer this name when documenting ordered routes.
+    pub fn params_ordered(
+        self,
+        params: impl IntoIterator<Item = (impl Into<String>, impl ToString)>,
+    ) -> Self {
+        self.params_iter(params)
+    }
+
+    /// Overrides the client base URL for this request only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Result};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let _ = client
+    ///     .get("/health")
+    ///     .base_url("https://status.example.com")?
+    ///     .send()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn base_url(mut self, base_url: impl AsRef<str>) -> Result<Self> {
+        self.base_url = Some(Url::parse(base_url.as_ref()).map_err(Error::InvalidBaseUrl)?);
+        Ok(self)
+    }
+
     /// Adds a query string parameter.
     pub fn query(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.query
@@ -105,10 +152,7 @@ impl<'a> RequestBuilder<'a> {
 
     /// Adds a request header.
     pub fn header(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Result<Self> {
-        let name = http::HeaderName::from_bytes(key.as_ref().as_bytes())
-            .map_err(|e| Error::Other(format!("invalid header name: {e}")))?;
-        let value = http::HeaderValue::from_str(value.as_ref())
-            .map_err(|e| Error::Other(format!("invalid header value: {e}")))?;
+        let (name, value) = parse_request_header(key, value)?;
         self.headers.insert(name, value);
         Ok(self)
     }
@@ -116,7 +160,7 @@ impl<'a> RequestBuilder<'a> {
     /// Sets a JSON request body (feature `json`).
     #[cfg(feature = "json")]
     pub fn json<T: serde::Serialize>(mut self, body: &T) -> Result<Self> {
-        let bytes = serde_json::to_vec(body).map_err(|e| Error::Other(e.to_string()))?;
+        let bytes = serde_json::to_vec(body).map_err(|e| Error::Config(e.to_string()))?;
         self.body = HttpBody::Bytes(Bytes::from(bytes));
         if !self.headers.contains_key(http::header::CONTENT_TYPE) {
             self.headers.insert(
@@ -130,6 +174,30 @@ impl<'a> RequestBuilder<'a> {
     /// Sets a raw request body.
     pub fn body(mut self, body: impl Into<Bytes>) -> Self {
         self.body = HttpBody::Bytes(body.into());
+        self
+    }
+
+    /// Sets `Content-Type` when not already present.
+    pub fn content_type(mut self, value: impl AsRef<str>) -> Result<Self> {
+        self.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_str(value.as_ref())
+                .map_err(|e| Error::InvalidHeaderValue(e.to_string()))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets a streaming request body (not replayable with automatic retry).
+    ///
+    /// Sets `Content-Type` to `application/octet-stream` when not already set.
+    pub fn body_stream(mut self, stream: crate::BodyStream) -> Self {
+        self.body = HttpBody::Stream(stream);
+        if !self.headers.contains_key(http::header::CONTENT_TYPE) {
+            self.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/octet-stream"),
+            );
+        }
         self
     }
 
@@ -353,5 +421,26 @@ impl<'a> RequestBuilder<'a> {
             return self.send_json().await;
         }
         self.send().await?.json_validated().await
+    }
+
+    /// Serializes and validates `body` with [`garde::Validate`] before sending (feature `validate`).
+    #[cfg(feature = "validate")]
+    pub fn json_validated<T>(mut self, body: &T) -> Result<Self>
+    where
+        T: serde::Serialize + garde::Validate,
+        T::Context: Default,
+    {
+        body.validate().map_err(|report| Error::RequestValidation {
+            message: report.to_string(),
+        })?;
+        let bytes = serde_json::to_vec(body).map_err(|e| Error::Config(e.to_string()))?;
+        self.body = HttpBody::Bytes(Bytes::from(bytes));
+        if !self.headers.contains_key(http::header::CONTENT_TYPE) {
+            self.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+        }
+        Ok(self)
     }
 }

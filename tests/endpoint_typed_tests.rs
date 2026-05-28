@@ -20,6 +20,8 @@ impl Endpoint for GetItem {
     type Response = Item;
     type Params = GetItemParams;
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 #[tokio::test]
@@ -74,13 +76,15 @@ async fn endpoint_query_trait_applies_params() -> Result<()> {
         type Response = Item;
         type Params = GetWithQueryParams;
         type Query = VerboseQuery;
+        type Body = ();
+        type Headers = ();
     }
 
     let client = Client::new(server.uri())?;
     let item = client
         .call::<GetWithQuery>()
         .params(GetWithQueryParams { id: 1 })
-        .query(VerboseQuery { verbose: true })
+        .query(VerboseQuery { verbose: true })?
         .send_json()
         .await?;
 
@@ -110,6 +114,8 @@ async fn endpoint_query_index_map_still_works() -> Result<()> {
         type Response = Item;
         type Params = IndexQueryParams;
         type Query = IndexMap<String, QueryValue>;
+        type Body = ();
+        type Headers = ();
     }
 
     let mut query = IndexMap::new();
@@ -119,7 +125,7 @@ async fn endpoint_query_index_map_still_works() -> Result<()> {
     let item = client
         .call::<GetWithIndexQuery>()
         .params(IndexQueryParams { id: 2 })
-        .query(query)
+        .query(query)?
         .send_json()
         .await?;
 

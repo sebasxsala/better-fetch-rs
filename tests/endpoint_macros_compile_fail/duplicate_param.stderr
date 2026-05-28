@@ -1,0 +1,5 @@
+error: duplicate path parameter `id`
+ --> $WORKSPACE/tests/endpoint_macros_compile_fail/duplicate_param.rs
+  |
+  |     #[param(rename = "id")]
+  |     ^

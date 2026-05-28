@@ -19,6 +19,8 @@ impl Endpoint for ListTodos {
     type Response = Vec<Todo>;
     type Params = ();
     type Query = ListQuery;
+    type Body = ();
+    type Headers = ();
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -61,6 +63,6 @@ mod tests {
         let _builder = client
             .call::<ListTodos>()
             .query(ListQuery { user_id: Some(1) })
-            .into_inner();
+            .unwrap();
     }
 }

@@ -5,6 +5,7 @@
 //! structured API error payloads.
 
 use std::fmt;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use http::StatusCode;
@@ -61,6 +62,9 @@ pub enum Error {
         kind: TransportKind,
         /// Human-readable detail (typically from the underlying error's `Display`).
         message: String,
+        /// Underlying error when available (e.g. reqwest).
+        #[source]
+        source: Option<Arc<dyn std::error::Error + Send + Sync>>,
     },
 
     /// Non-success HTTP response (when using throw mode or `send_json`).
@@ -129,7 +133,69 @@ pub enum Error {
     #[error("hook error: {0}")]
     Hook(String),
 
-    /// Catch-all for configuration or plugin errors.
+    /// Query parameter serialization failed (typed endpoint query).
+    ///
+    /// Returned from [`EndpointRequestBuilder::query`](crate::EndpointRequestBuilder::query) and
+    /// [`EndpointQuery::apply_query`](crate::EndpointQuery::apply_query) when serde serialization fails (since 0.4.0).
+    #[error("failed to serialize query: {0}")]
+    QuerySerialize(String),
+
+    /// Invalid HTTP header name ([`RequestBuilder::header`](crate::RequestBuilder::header)).
+    #[error("invalid header name: {0}")]
+    InvalidHeaderName(String),
+
+    /// Invalid HTTP header value ([`RequestBuilder::header`](crate::RequestBuilder::header)).
+    #[error("invalid header value: {0}")]
+    InvalidHeaderValue(String),
+
+    /// A `:param` segment in the path template was not supplied.
+    #[error("missing path parameter for `{0}`")]
+    MissingPathParam(String),
+
+    /// Route not registered in a strict [`SchemaRegistry`](crate::SchemaRegistry) (feature `schema`).
+    #[error("route not in schema registry: {method} {path}")]
+    SchemaRoute {
+        /// HTTP method.
+        method: String,
+        /// Path template.
+        path: String,
+    },
+
+    /// JSON Schema validation failed (feature `schema-validate`).
+    #[cfg(feature = "schema-validate")]
+    #[error("JSON schema validation failed ({phase}): {message}")]
+    SchemaValidation {
+        /// `"request"` or `"response"`.
+        phase: &'static str,
+        /// Validator detail.
+        message: String,
+    },
+
+    /// Invalid `Authorization` header value.
+    #[error("invalid authorization header: {0}")]
+    InvalidAuthHeader(String),
+
+    /// Request body cannot be replayed for automatic retry (stream or multipart).
+    #[error("automatic retry is not supported with non-replayable request bodies")]
+    NonReplayableBody,
+
+    /// Request body failed validation before send (feature `validate`).
+    #[cfg(feature = "validate")]
+    #[error("request validation failed: {message}")]
+    RequestValidation {
+        /// Validation error detail.
+        message: String,
+    },
+
+    /// I/O error (file writes, etc.).
+    #[error("I/O error: {0}")]
+    Io(String),
+
+    /// Internal client configuration error.
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    /// Catch-all for rare plugin errors.
     #[error("{0}")]
     Other(String),
 }
@@ -140,12 +206,36 @@ impl Error {
         Self::Transport {
             kind,
             message: message.into(),
+            source: None,
+        }
+    }
+
+    /// Builds a transport error with an underlying source error.
+    pub fn transport_with_source(
+        kind: TransportKind,
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Transport {
+            kind,
+            message: message.into(),
+            source: Some(Arc::new(source)),
         }
     }
 
     /// Builds a transport error with [`TransportKind::Other`].
     pub fn transport_message(message: impl Into<String>) -> Self {
         Self::transport(TransportKind::Other, message)
+    }
+
+    /// Returns the transport error source when present.
+    pub fn transport_source(&self) -> Option<&(dyn std::error::Error + Send + Sync)> {
+        match self {
+            Self::Transport {
+                source: Some(s), ..
+            } => Some(s.as_ref()),
+            _ => None,
+        }
     }
 
     /// Returns the transport failure category when this error is [`Error::Transport`].
@@ -197,6 +287,26 @@ impl Error {
             message: message.into(),
             body,
         }
+    }
+
+    /// Builds an HTTP error using canonical status text and a message derived from `body` when present.
+    pub(crate) fn http_error_for_status(status: StatusCode, body: Option<Bytes>) -> Self {
+        let status_text = status
+            .canonical_reason()
+            .unwrap_or("request failed")
+            .to_string();
+        let message = body
+            .as_ref()
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(|s| s.chars().take(512).collect::<String>())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| status_text.clone());
+        Self::http_with_status_text(status, status_text, message, body)
+    }
+
+    /// Builds a query serialization error.
+    pub fn query_serialize(message: impl Into<String>) -> Self {
+        Self::QuerySerialize(message.into())
     }
 
     /// Returns the HTTP status when this error is response-related.
@@ -329,9 +439,11 @@ pub(crate) fn map_transport_error(err: reqwest::Error) -> Error {
     }
 
     let kind = transport_kind_from_reqwest(&err);
+    let message = err.to_string();
     Error::Transport {
         kind,
-        message: err.to_string(),
+        message,
+        source: Some(Arc::new(err)),
     }
 }
 

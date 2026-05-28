@@ -25,7 +25,7 @@ async fn strict_registry_blocks_unregistered_route() -> Result<()> {
     assert!(client.get("/allowed").send().await?.is_success());
 
     let err = client.get("/blocked").send().await.unwrap_err();
-    assert!(matches!(err, Error::Other(_)));
+    assert!(matches!(err, Error::SchemaRoute { .. }));
     assert!(err.to_string().contains("route not in schema registry"));
     Ok(())
 }

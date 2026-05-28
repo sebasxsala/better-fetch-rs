@@ -24,6 +24,24 @@ tower = ["dep:tower", "rustls-tls"]
 tower-http = ["tower", "dep:tower-http"]
 macros = ["dep:better-fetch-macros"]
 validate = ["json", "dep:garde"]
+schema-validate = ["schema", "dep:jsonschema", "json"]
+miette = ["dep:miette"]
+## Re-exports `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry` (no OTLP exporter bundled).
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+## All common optional features for internal apps (`better_fetch::prelude` + full API surface).
+full = [
+    "json",
+    "rustls-tls",
+    "macros",
+    "schema",
+    "validate",
+    "schema-validate",
+    "miette",
+    "otel",
+    "tower",
+    "multipart",
+    "openapi",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["time", "sync", "macros"] }
@@ -48,9 +66,15 @@ pin-project-lite = "0.2"
 tower-http = { version = "0.6", optional = true, default-features = false, features = ["tower", "trace"] }
 better-fetch-macros = { workspace = true, optional = true }
 garde = { workspace = true, optional = true }
+jsonschema = { version = "0.29", optional = true }
+miette = { version = "7", optional = true }
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.28", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
 wiremock = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -183,6 +207,102 @@ name = "streaming_tower_tests"
 path = "../../tests/streaming_tower_tests.rs"
 required-features = ["tower"]
 
+[[test]]
+name = "http_edge_tests"
+path = "../../tests/http_edge_tests.rs"
+
+[[test]]
+name = "pipeline_parity_tests"
+path = "../../tests/pipeline_parity_tests.rs"
+
+[[test]]
+name = "query_serialize_tests"
+path = "../../tests/query_serialize_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "base_url_tests"
+path = "../../tests/base_url_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "recording_tests"
+path = "../../tests/recording_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "response_body_kind_tests"
+path = "../../tests/response_body_kind_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "stream_to_file_tests"
+path = "../../tests/stream_to_file_tests.rs"
+
+[[test]]
+name = "sse_tests"
+path = "../../tests/sse_tests.rs"
+
+[[test]]
+name = "hooks_error_context_tests"
+path = "../../tests/hooks_error_context_tests.rs"
+
+[[test]]
+name = "retry_cancel_tests"
+path = "../../tests/retry_cancel_tests.rs"
+
+[[test]]
+name = "retry_timing_tests"
+path = "../../tests/retry_timing_tests.rs"
+
+[[test]]
+name = "upload_stream_tests"
+path = "../../tests/upload_stream_tests.rs"
+
+[[test]]
+name = "request_validate_tests"
+path = "../../tests/request_validate_tests.rs"
+required-features = ["validate"]
+
+[[test]]
+name = "api_response_tests"
+path = "../../tests/api_response_tests.rs"
+required-features = ["json"]
+
+[[test]]
+name = "schema_validate_tests"
+path = "../../tests/schema_validate_tests.rs"
+required-features = ["schema-validate"]
+
+[[test]]
+name = "miette_diagnostic_tests"
+path = "../../tests/miette_diagnostic_tests.rs"
+required-features = ["miette"]
+
+[[test]]
+name = "endpoint_register_tests"
+path = "../../tests/endpoint_register_tests.rs"
+required-features = ["macros", "schema", "json"]
+
+[[example]]
+name = "tower_vs_streaming"
+path = "../../examples/tower_vs_streaming.rs"
+required-features = ["tower", "json"]
+
+[[example]]
+name = "throw_on_error"
+path = "../../examples/throw_on_error.rs"
+required-features = ["json"]
+
+[[example]]
+name = "cancel"
+path = "../../examples/cancel.rs"
+
+[[example]]
+name = "buffered_vs_streaming"
+path = "../../examples/buffered_vs_streaming.rs"
+required-features = ["json"]
+
 [[example]]
 name = "streaming"
 path = "../../examples/streaming.rs"
@@ -237,3 +357,18 @@ required-features = ["multipart"]
 name = "openapi_export"
 path = "../../examples/openapi_export.rs"
 required-features = ["openapi"]
+
+[[example]]
+name = "upload_stream"
+path = "../../examples/upload_stream.rs"
+required-features = ["json"]
+
+[[example]]
+name = "validated_request"
+path = "../../examples/validated_request.rs"
+required-features = ["validate"]
+
+[[example]]
+name = "needs_body"
+path = "../../examples/needs_body.rs"
+required-features = ["macros", "json"]

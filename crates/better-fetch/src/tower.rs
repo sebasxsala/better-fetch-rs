@@ -16,4 +16,7 @@ pub mod stack;
 #[cfg(feature = "tower-http")]
 pub mod trace;
 
-pub use service::{BoxHttpService, ReqwestHttpService, ServiceBackend};
+pub use service::{
+    BoxHttpService, BoxStreamingHttpService, ReqwestHttpService, ReqwestStreamingHttpService,
+    ServiceBackend,
+};

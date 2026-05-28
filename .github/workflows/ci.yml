@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  merge_group:
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,3 +35,6 @@ jobs:
 
       - name: Tests
         run: cargo test --all-features
+
+      - name: Tests (schema-validate feature)
+        run: cargo test -p better-fetch --features schema-validate,json,rustls-tls

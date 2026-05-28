@@ -31,6 +31,8 @@ pub struct RequestContext {
     /// Request headers.
     pub headers: HeaderMap,
     /// Request body when present.
+    ///
+    /// Mutations are applied to the outgoing HTTP request after all `on_request` hooks run (since 0.4.0).
     pub body: Option<Bytes>,
     /// Number of times this request has already been retried (`0` on the first HTTP attempt).
     ///
@@ -96,6 +98,29 @@ pub struct ErrorContext {
     pub response: Option<Response>,
     /// Error that occurred.
     pub error: Error,
+}
+
+impl ErrorContext {
+    /// UTF-8 preview of the buffered response body when [`Self::response`] is set.
+    ///
+    /// Non-UTF-8 bodies return `None`. Truncates to `max_bytes` (default use: 512).
+    pub fn response_body_preview(&self, max_bytes: usize) -> Option<String> {
+        let body = self.response.as_ref()?.bytes();
+        if body.is_empty() {
+            return None;
+        }
+        let lossy = String::from_utf8_lossy(body);
+        if lossy.len() <= max_bytes {
+            Some(lossy.into_owned())
+        } else {
+            let end = lossy
+                .char_indices()
+                .map(|(i, _)| i)
+                .nth(max_bytes)
+                .unwrap_or(lossy.len());
+            Some(format!("{}…", &lossy[..end]))
+        }
+    }
 }
 
 type RequestHookFn = Arc<

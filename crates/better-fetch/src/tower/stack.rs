@@ -1,9 +1,11 @@
 //! Helpers for building transport stacks with [`ServiceBuilder`](tower::ServiceBuilder).
 
-use crate::backend::{HttpRequest, HttpResponse};
+use crate::backend::{HttpRequest, HttpResponse, HttpStreamingResponse};
 use crate::Error;
 
-use super::{BoxHttpService, ReqwestHttpService};
+use super::{
+    BoxHttpService, BoxStreamingHttpService, ReqwestHttpService, ReqwestStreamingHttpService,
+};
 
 pub use tower::limit::{ConcurrencyLimitLayer, RateLimitLayer};
 pub use tower::timeout::TimeoutLayer;
@@ -25,6 +27,23 @@ where
     configure(ReqwestHttpService::new(client))
 }
 
+/// Builds buffered and streaming transport stacks from one configuration closure.
+pub fn build_dual<F>(
+    client: reqwest::Client,
+    configure: F,
+) -> (BoxHttpService, BoxStreamingHttpService)
+where
+    F: FnOnce(
+        ReqwestHttpService,
+        ReqwestStreamingHttpService,
+    ) -> (BoxHttpService, BoxStreamingHttpService),
+{
+    configure(
+        ReqwestHttpService::new(client.clone()),
+        ReqwestStreamingHttpService::new(client),
+    )
+}
+
 /// Extension trait to box a configured service stack.
 pub trait IntoBoxHttpService: Sized {
     /// Boxes `self` as [`BoxHttpService`].
@@ -38,6 +57,25 @@ where
 {
     fn into_box(self) -> BoxHttpService {
         BoxHttpService::new(self)
+    }
+}
+
+/// Extension trait to box a configured streaming service stack.
+pub trait IntoBoxStreamingHttpService: Sized {
+    /// Boxes `self` as [`BoxStreamingHttpService`].
+    fn into_streaming_box(self) -> BoxStreamingHttpService;
+}
+
+impl<S> IntoBoxStreamingHttpService for S
+where
+    S: tower::Service<HttpRequest, Response = HttpStreamingResponse, Error = Error>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+{
+    fn into_streaming_box(self) -> BoxStreamingHttpService {
+        BoxStreamingHttpService::new(self)
     }
 }
 

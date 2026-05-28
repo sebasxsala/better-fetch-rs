@@ -6,6 +6,36 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
+async fn on_request_can_replace_body() -> Result<()> {
+    use wiremock::matchers::{body_string, method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/body"))
+        .and(body_string("from-hook"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let hooks = Hooks::new().on_request(|mut ctx| async move {
+        ctx.body = Some(bytes::Bytes::from_static(b"from-hook"));
+        Ok(ctx)
+    });
+
+    let client = Client::builder()
+        .base_url(server.uri())?
+        .hooks(hooks)
+        .build()?;
+
+    client
+        .post("/body")
+        .body(bytes::Bytes::from_static(b"ignored"))
+        .send()
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn on_request_can_modify_headers() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -86,6 +116,36 @@ async fn on_error_for_http_500() -> Result<()> {
         .build()?;
 
     let _ = client.get("/fail").send().await?;
+    assert!(fired.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[tokio::test]
+async fn on_error_fires_for_send_stream_5xx_without_throw() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/fail-stream"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("err"))
+        .mount(&server)
+        .await;
+
+    let fired = Arc::new(AtomicBool::new(false));
+    let fired_c = fired.clone();
+    let hooks = Hooks::new().on_error(move |ctx| {
+        let fired_c = fired_c.clone();
+        async move {
+            assert!(ctx.response.is_some());
+            fired_c.store(true, Ordering::SeqCst);
+        }
+    });
+
+    let client = Client::builder()
+        .base_url(server.uri())?
+        .hooks(hooks)
+        .build()?;
+
+    let stream = client.get("/fail-stream").send_stream().await?;
+    assert_eq!(stream.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
     assert!(fired.load(Ordering::SeqCst));
     Ok(())
 }

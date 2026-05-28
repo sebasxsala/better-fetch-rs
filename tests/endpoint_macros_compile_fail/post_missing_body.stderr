@@ -1,0 +1,16 @@
+warning: unused import: `Result`
+ --> $WORKSPACE/tests/endpoint_macros_compile_fail/post_missing_body.rs
+  |
+  | use better_fetch::{Client, EndpointDerive, Result};
+  |                                            ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `send` found for struct `EndpointRequestBuilder<'_, CreateTodo, NeedsBody>` in the current scope
+ --> $WORKSPACE/tests/endpoint_macros_compile_fail/post_missing_body.rs
+  |
+  |     let _ = client.call::<CreateTodo>().send();
+  |                                         ^^^^ method not found in `EndpointRequestBuilder<'_, CreateTodo, NeedsBody>`
+  |
+  = note: the method was found for
+          - `EndpointRequestBuilder<'a, E, better_fetch::Ready>`

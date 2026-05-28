@@ -50,6 +50,6 @@ async fn multipart_with_retry_policy_errors_on_second_attempt() -> Result<()> {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, better_fetch::Error::Other(_)));
+    assert!(matches!(err, better_fetch::Error::NonReplayableBody));
     Ok(())
 }

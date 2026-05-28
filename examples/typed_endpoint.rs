@@ -20,6 +20,8 @@ impl Endpoint for GetTodo {
     type Response = Todo;
     type Params = GetTodoParams;
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 #[derive(Debug, Deserialize)]

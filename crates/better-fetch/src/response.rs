@@ -7,8 +7,24 @@
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 
+use http::header::CONTENT_TYPE;
+
 use crate::error::Error;
 use crate::Result;
+
+/// Parsed response body selected from `Content-Type`.
+#[derive(Debug, Clone)]
+pub enum ResponseBodyKind {
+    /// No body bytes.
+    Empty,
+    /// `text/*` or unknown UTF-8 text.
+    Text(String),
+    /// `application/json` (feature `json`).
+    #[cfg(feature = "json")]
+    Json(serde_json::Value),
+    /// Binary or non-JSON types.
+    Bytes(Bytes),
+}
 
 /// HTTP response wrapper.
 ///
@@ -221,6 +237,55 @@ impl Response {
     /// Splits into status, headers, and body.
     pub fn into_parts(self) -> (StatusCode, HeaderMap, Bytes) {
         (self.status, self.headers, self.body)
+    }
+
+    /// Classifies the body using the `Content-Type` header (does not check HTTP status).
+    pub fn body_by_content_type(&self) -> ResponseBodyKind {
+        if self.body.is_empty() {
+            return ResponseBodyKind::Empty;
+        }
+
+        let mime = self
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+
+        #[cfg(feature = "json")]
+        if mime.contains("json") {
+            if let Ok(value) = serde_json::from_slice(&self.body) {
+                return ResponseBodyKind::Json(value);
+            }
+        }
+
+        if mime.starts_with("text/") || mime == "application/xml" || mime == "application/xhtml+xml"
+        {
+            return ResponseBodyKind::Text(String::from_utf8_lossy(&self.body).into_owned());
+        }
+
+        if mime.is_empty() {
+            if let Ok(text) = std::str::from_utf8(&self.body) {
+                if text
+                    .chars()
+                    .all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+                {
+                    return ResponseBodyKind::Text(text.to_string());
+                }
+            }
+        }
+
+        ResponseBodyKind::Bytes(self.body.clone())
+    }
+
+    /// Like [`body_by_content_type`](Self::body_by_content_type) after verifying a 2xx status.
+    pub fn into_body_by_content_type(self) -> Result<ResponseBodyKind> {
+        self.error_for_status()?;
+        Ok(self.body_by_content_type())
     }
 }
 

@@ -10,10 +10,12 @@
 //! `EndpointQueryDerive`.
 
 use std::marker::PhantomData;
+use std::ops::Deref;
 
 use http::Method;
 use indexmap::IndexMap;
 
+use crate::error::Error;
 use crate::request::RequestBuilder;
 use crate::url_build::QueryValue;
 
@@ -23,6 +25,10 @@ use serde::de::DeserializeOwned;
 /// Type-state: path parameters still required before send.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NeedsParams;
+
+/// Type-state: request body required before send (POST with typed body via `#[derive(Endpoint)]`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NeedsBody;
 
 /// Type-state: ready to configure query/headers and send.
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,6 +56,8 @@ pub struct Ready;
 ///     type Response = Todo;
 ///     type Params = GetTodoParams;
 ///     type Query = ();
+///     type Body = ();
+///     type Headers = ();
 /// }
 ///
 /// #[derive(Deserialize)]
@@ -84,6 +92,61 @@ pub trait Endpoint {
     type Params: EndpointParams + Default;
     /// Query parameters applied via [`EndpointRequestBuilder::query`].
     type Query: EndpointQuery + Default;
+
+    /// Optional typed request body ([`()`] = none).
+    type Body: EndpointBody + Default;
+
+    /// Optional typed request headers ([`()`] = none).
+    type Headers: EndpointHeaders + Default;
+}
+
+/// Applies a typed request body before send.
+pub trait EndpointBody: Default + Sized {
+    /// Builder state after [`.params()`](EndpointRequestBuilder::params) when path params were required.
+    type ParamsNext: Default;
+    /// Whether [`Client::call`](crate::Client::call) starts in [`NeedsBody`] (POST + required body).
+    type CallInitial: Default;
+
+    /// Applies this body to the builder.
+    fn apply_body(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>>;
+}
+
+impl EndpointBody for () {
+    type ParamsNext = Ready;
+    type CallInitial = Ready;
+
+    fn apply_body(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>> {
+        Ok(builder)
+    }
+}
+
+/// Default `()` params initial state when `E::Params` is [`()`].
+pub trait DefaultParamsInitial<E: Endpoint> {
+    fn initial(
+        client: &crate::Client,
+    ) -> EndpointRequestBuilder<'_, E, <E::Body as EndpointBody>::CallInitial>;
+}
+
+impl<E: Endpoint> DefaultParamsInitial<E> for ()
+where
+    E::Params: EndpointParams<BuilderState = Ready>,
+    E::Body: EndpointBody<CallInitial = Ready>,
+{
+    fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, Ready> {
+        EndpointRequestBuilder::new_ready(client.request(E::METHOD, E::PATH))
+    }
+}
+
+/// Applies typed default headers before send.
+pub trait EndpointHeaders: Default + Sized {
+    /// Applies headers to the builder.
+    fn apply_headers(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>>;
+}
+
+impl EndpointHeaders for () {
+    fn apply_headers(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>> {
+        Ok(builder)
+    }
 }
 
 /// Initial builder state for an endpoint's path parameters.
@@ -91,16 +154,25 @@ pub type ParamsBuilderState<P> = <P as EndpointParams>::BuilderState;
 
 /// Creates the initial [`EndpointRequestBuilder`] for `client.call::<E>()`.
 pub trait EndpointParamsInitial<E: Endpoint>: EndpointParams {
-    fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, Self::BuilderState>;
+    /// Type-state after [`Client::call`](crate::Client::call).
+    type State;
+    fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, Self::State>;
 }
 
-impl<E: Endpoint> EndpointParamsInitial<E> for () {
-    fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, Ready> {
-        EndpointRequestBuilder::new_ready(client.request(E::METHOD, E::PATH))
+impl<E: Endpoint> EndpointParamsInitial<E> for ()
+where
+    (): DefaultParamsInitial<E>,
+{
+    type State = <E::Body as EndpointBody>::CallInitial;
+
+    fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, Self::State> {
+        <() as DefaultParamsInitial<E>>::initial(client)
     }
 }
 
 impl<E: Endpoint, P: EndpointParams<BuilderState = NeedsParams>> EndpointParamsInitial<E> for P {
+    type State = NeedsParams;
+
     fn initial(client: &crate::Client) -> EndpointRequestBuilder<'_, E, NeedsParams> {
         EndpointRequestBuilder::new_needs_params(client.request(E::METHOD, E::PATH))
     }
@@ -141,18 +213,18 @@ impl EndpointParams for Vec<(String, String)> {
 /// Applies query parameters to a [`RequestBuilder`].
 pub trait EndpointQuery {
     /// Applies this type's query map to `builder`.
-    fn apply_query(self, builder: RequestBuilder<'_>) -> RequestBuilder<'_>;
+    fn apply_query(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>>;
 }
 
 impl EndpointQuery for () {
-    fn apply_query(self, builder: RequestBuilder<'_>) -> RequestBuilder<'_> {
-        builder
+    fn apply_query(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>> {
+        Ok(builder)
     }
 }
 
 impl EndpointQuery for IndexMap<String, QueryValue> {
-    fn apply_query(self, builder: RequestBuilder<'_>) -> RequestBuilder<'_> {
-        builder.queries(self)
+    fn apply_query(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>> {
+        Ok(builder.queries(self))
     }
 }
 
@@ -161,17 +233,40 @@ impl EndpointQuery for IndexMap<String, QueryValue> {
 pub fn apply_serialized_query<T: serde::Serialize>(
     query: T,
     builder: RequestBuilder<'_>,
-) -> RequestBuilder<'_> {
-    match crate::url_build::serialize_to_query_map(&query) {
-        Ok(map) => builder.queries(map),
-        Err(_) => builder,
-    }
+) -> crate::Result<RequestBuilder<'_>> {
+    let map = crate::url_build::serialize_to_query_map(&query).map_err(|e| match e {
+        Error::Other(msg) => Error::query_serialize(msg),
+        other => other,
+    })?;
+    Ok(builder.queries(map))
+}
+
+/// Serializes and validates a query struct before applying it (feature `validate`).
+#[cfg(all(feature = "json", feature = "validate"))]
+pub fn apply_serialized_query_validated<T>(
+    query: T,
+    builder: RequestBuilder<'_>,
+) -> crate::Result<RequestBuilder<'_>>
+where
+    T: serde::Serialize + garde::Validate,
+    T::Context: Default,
+{
+    garde::Validate::validate(&query).map_err(|report: garde::Report| {
+        Error::RequestValidation {
+            message: report.to_string(),
+        }
+    })?;
+    apply_serialized_query(query, builder)
 }
 
 /// Fluent builder for a typed [`Endpoint`].
 ///
 /// When `E::Params` is not [`()`], the builder starts in [`NeedsParams`] and requires
 /// [`.params()`](Self::params) before [`.send_json()`](Self::send_json).
+///
+/// After [`.params()`](Self::params), use [`Deref`] to [`RequestBuilder`](crate::RequestBuilder) for
+/// `.query("k", "v")`, `.form(...)`, etc., or the forwarded methods on this type.
+#[must_use = "endpoint builders do nothing until you call `.send().await`, `.send_json().await`, or similar"]
 pub struct EndpointRequestBuilder<'a, E: Endpoint, S> {
     pub(crate) inner: RequestBuilder<'a>,
     _marker: PhantomData<(E, S)>,
@@ -185,10 +280,69 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, NeedsParams> {
         }
     }
 
-    /// Applies typed path parameters for `E::Params` and transitions to [`Ready`].
-    pub fn params(self, params: E::Params) -> EndpointRequestBuilder<'a, E, Ready> {
+    /// Applies typed path parameters and transitions to the next builder state.
+    pub fn params(
+        self,
+        params: E::Params,
+    ) -> EndpointRequestBuilder<'a, E, ParamsBuilderStateAfter<E>>
+    where
+        E::Body: EndpointBody,
+    {
         EndpointRequestBuilder {
             inner: params.apply_params(self.inner),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Builder state after path params when `E::Body` may require a body.
+pub type ParamsBuilderStateAfter<E> = <<E as Endpoint>::Body as EndpointBody>::ParamsNext;
+
+impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, NeedsBody> {
+    pub fn new_needs_body(inner: RequestBuilder<'a>) -> Self {
+        Self {
+            inner,
+            _marker: PhantomData,
+        }
+    }
+
+    /// JSON request body (transitions to [`Ready`]).
+    #[cfg(feature = "json")]
+    pub fn json<T: serde::Serialize>(
+        self,
+        body: &T,
+    ) -> crate::Result<EndpointRequestBuilder<'a, E, Ready>> {
+        Ok(EndpointRequestBuilder {
+            inner: self.inner.json(body)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Validated JSON request body (feature `validate`).
+    #[cfg(feature = "validate")]
+    pub fn json_validated<T>(self, body: &T) -> crate::Result<EndpointRequestBuilder<'a, E, Ready>>
+    where
+        T: serde::Serialize + garde::Validate,
+        T::Context: Default,
+    {
+        Ok(EndpointRequestBuilder {
+            inner: self.inner.json_validated(body)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Applies typed request body for `E::Body` (transitions to [`Ready`]).
+    pub fn with_body(self, body: E::Body) -> crate::Result<EndpointRequestBuilder<'a, E, Ready>> {
+        Ok(EndpointRequestBuilder {
+            inner: body.apply_body(self.inner)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Raw request body (transitions to [`Ready`]).
+    pub fn body(self, body: impl Into<bytes::Bytes>) -> EndpointRequestBuilder<'a, E, Ready> {
+        EndpointRequestBuilder {
+            inner: self.inner.body(body),
             _marker: PhantomData,
         }
     }
@@ -203,11 +357,65 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
     }
 
     /// Applies typed query parameters for `E::Query`.
-    pub fn query(self, query: E::Query) -> Self {
-        Self {
-            inner: query.apply_query(self.inner),
+    ///
+    /// Returns [`Error::QuerySerialize`](crate::Error::QuerySerialize) when serde serialization fails
+    /// (since 0.4.0 — failures are no longer ignored).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use better_fetch::{Client, Endpoint, Result, define_params};
+    /// # use http::Method;
+    /// # use serde::{Deserialize, Serialize};
+    /// define_params!(ItemParams for "/items/:id" { id: u64 });
+    ///
+    /// #[derive(Default, Serialize)]
+    /// struct ItemQuery { tag: Option<String> }
+    /// better_fetch::impl_serde_endpoint_query!(ItemQuery);
+    ///
+    /// struct GetItem;
+    /// impl Endpoint for GetItem {
+    ///     const METHOD: Method = Method::GET;
+    ///     const PATH: &'static str = "/items/:id";
+    ///     type Response = serde_json::Value;
+    ///     type Params = ItemParams;
+    ///     type Query = ItemQuery;
+    ///     type Body = ();
+    ///     type Headers = ();
+    /// }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let client = Client::new("https://api.example.com")?;
+    /// let _ = client
+    ///     .call::<GetItem>()
+    ///     .params(ItemParams { id: 1 })
+    ///     .query(ItemQuery { tag: Some("news".into()) })?
+    ///     .send_json()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn query(self, query: E::Query) -> crate::Result<Self> {
+        Ok(Self {
+            inner: query.apply_query(self.inner)?,
             _marker: PhantomData,
-        }
+        })
+    }
+
+    /// Like [`Self::query`] but runs [`garde::Validate`] on the query value first (feature `validate`).
+    ///
+    /// Intended for serde query structs (including those using [`EndpointQueryDerive`](crate::EndpointQueryDerive)).
+    #[cfg(all(feature = "json", feature = "validate"))]
+    pub fn query_validated(self, query: E::Query) -> crate::Result<Self>
+    where
+        E::Query: serde::Serialize + garde::Validate,
+        <E::Query as garde::Validate>::Context: Default,
+    {
+        Ok(Self {
+            inner: apply_serialized_query_validated(query, self.inner)?,
+            _marker: PhantomData,
+        })
     }
 
     /// Adds a request header.
@@ -242,9 +450,107 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
         }
     }
 
+    /// Overrides the client base URL for this request ([`RequestBuilder::base_url`](crate::RequestBuilder::base_url)).
+    pub fn base_url(self, base_url: impl AsRef<str>) -> crate::Result<Self> {
+        Ok(Self {
+            inner: self.inner.base_url(base_url)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Overrides retry policy ([`RequestBuilder::retry`](crate::RequestBuilder::retry)).
+    pub fn retry(self, policy: crate::RetryPolicy) -> Self {
+        Self {
+            inner: self.inner.retry(policy),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Overrides timeout ([`RequestBuilder::timeout`](crate::RequestBuilder::timeout)).
+    pub fn timeout(self, timeout: std::time::Duration) -> Self {
+        Self {
+            inner: self.inner.timeout(timeout),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Streaming execution ([`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream)).
+    pub async fn send_stream(self) -> crate::Result<crate::StreamingResponse> {
+        self.inner.send_stream().await
+    }
+
+    /// Caps streaming response size ([`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes)).
+    pub fn max_response_bytes(self, limit: u64) -> Self {
+        Self {
+            inner: self.inner.max_response_bytes(limit),
+            _marker: PhantomData,
+        }
+    }
+
+    /// JSON request body ([`RequestBuilder::json`](crate::RequestBuilder::json)).
+    #[cfg(feature = "json")]
+    pub fn json<T: serde::Serialize>(self, body: &T) -> crate::Result<Self> {
+        Ok(Self {
+            inner: self.inner.json(body)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Validated JSON request body (feature `validate`).
+    #[cfg(feature = "validate")]
+    pub fn json_validated<T>(self, body: &T) -> crate::Result<Self>
+    where
+        T: serde::Serialize + garde::Validate,
+        T::Context: Default,
+    {
+        Ok(Self {
+            inner: self.inner.json_validated(body)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Raw request body ([`RequestBuilder::body`](crate::RequestBuilder::body)).
+    pub fn body(self, body: impl Into<bytes::Bytes>) -> Self {
+        Self {
+            inner: self.inner.body(body),
+            _marker: PhantomData,
+        }
+    }
+
     /// Executes the request and returns [`Response`](crate::Response).
     pub async fn send(self) -> crate::Result<crate::Response> {
         self.inner.send().await
+    }
+
+    /// Applies typed request body for `E::Body`.
+    pub fn with_body(self, body: E::Body) -> crate::Result<Self> {
+        Ok(Self {
+            inner: body.apply_body(self.inner)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Applies typed headers for `E::Headers`.
+    pub fn with_headers(self, headers: E::Headers) -> crate::Result<Self> {
+        Ok(Self {
+            inner: headers.apply_headers(self.inner)?,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Like [`Self::with_headers`] but runs [`garde::Validate`] on the headers value first (feature `validate`).
+    #[cfg(feature = "validate")]
+    pub fn with_headers_validated(self, headers: E::Headers) -> crate::Result<Self>
+    where
+        E::Headers: garde::Validate,
+        <E::Headers as garde::Validate>::Context: Default,
+    {
+        garde::Validate::validate(&headers).map_err(|report: garde::Report| {
+            Error::RequestValidation {
+                message: report.to_string(),
+            }
+        })?;
+        self.with_headers(headers)
     }
 
     /// Executes and deserializes `E::Response` (feature `json`).
@@ -253,9 +559,22 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
         self.inner.send().await?.json::<E::Response>().await
     }
 
-    /// Returns the underlying [`RequestBuilder`] for advanced options.
-    pub fn into_inner(self) -> RequestBuilder<'a> {
-        self.inner
+    /// Success/error deserialization by status (feature `json`).
+    #[cfg(feature = "json")]
+    pub async fn send_api<T, ErrBody>(self) -> crate::Result<std::result::Result<T, ErrBody>>
+    where
+        T: serde::de::DeserializeOwned,
+        ErrBody: serde::de::DeserializeOwned,
+    {
+        crate::api_response::into_api_result(self.inner.send().await?)
+    }
+}
+
+impl<'a, E: Endpoint> Deref for EndpointRequestBuilder<'a, E, Ready> {
+    type Target = RequestBuilder<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -309,7 +628,7 @@ macro_rules! impl_serde_endpoint_query {
             fn apply_query(
                 self,
                 builder: $crate::RequestBuilder<'_>,
-            ) -> $crate::RequestBuilder<'_> {
+            ) -> $crate::Result<$crate::RequestBuilder<'_>> {
                 $crate::endpoint::apply_serialized_query(self, builder)
             }
         }
@@ -398,6 +717,8 @@ macro_rules! endpoint {
             type Response = $response;
             type Params = $params;
             type Query = $query;
+            type Body = ();
+            type Headers = ();
         }
     };
 }

@@ -11,7 +11,7 @@ readme = "README.md"
 publish = true
 
 [dependencies]
-better-fetch = { path = "../better-fetch", version = "0.3.0", default-features = true }
+better-fetch = { path = "../better-fetch", version = "0.4.0", default-features = true }
 
 [lints]
 workspace = true

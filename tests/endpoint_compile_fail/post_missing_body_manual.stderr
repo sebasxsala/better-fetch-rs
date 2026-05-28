@@ -1,0 +1,8 @@
+error[E0599]: no method named `send` found for struct `EndpointRequestBuilder<'_, CreateTodoManual, NeedsBody>` in the current scope
+ --> $WORKSPACE/tests/endpoint_compile_fail/post_missing_body_manual.rs
+  |
+  |     let _ = client.call::<CreateTodoManual>().send();
+  |                                               ^^^^ method not found in `EndpointRequestBuilder<'_, CreateTodoManual, NeedsBody>`
+  |
+  = note: the method was found for
+          - `EndpointRequestBuilder<'a, E, better_fetch::Ready>`

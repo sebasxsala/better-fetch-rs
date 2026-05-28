@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use better_fetch::backend::{HttpBackend, HttpRequest, HttpResponse};
-use better_fetch::tower::stack::{self, ConcurrencyLimitLayer, IntoBoxHttpService, ServiceBuilder};
+use better_fetch::tower::stack::{
+    self, ConcurrencyLimitLayer, IntoBoxHttpService, IntoBoxStreamingHttpService, ServiceBuilder,
+};
 use better_fetch::{ClientBuilder, Error, Result};
 use bytes::Bytes;
 use http::StatusCode;
@@ -44,17 +46,24 @@ async fn transport_stack_adds_header_via_map_request() -> Result<()> {
 
     let client = ClientBuilder::new()
         .base_url(server.uri())?
-        .transport_stack(|inner| {
-            ServiceBuilder::new()
-                .map_request(|mut req: HttpRequest| {
-                    req.headers.insert(
-                        http::HeaderName::from_static("x-tower-test"),
-                        http::HeaderValue::from_static("1"),
-                    );
-                    req
-                })
-                .service(inner)
-                .into_box()
+        .transport_stack(|buffered, streaming| {
+            let map_header = |mut req: HttpRequest| {
+                req.headers.insert(
+                    http::HeaderName::from_static("x-tower-test"),
+                    http::HeaderValue::from_static("1"),
+                );
+                req
+            };
+            (
+                ServiceBuilder::new()
+                    .map_request(map_header)
+                    .service(buffered)
+                    .into_box(),
+                ServiceBuilder::new()
+                    .map_request(map_header)
+                    .service(streaming)
+                    .into_streaming_box(),
+            )
         })
         .build()?;
 

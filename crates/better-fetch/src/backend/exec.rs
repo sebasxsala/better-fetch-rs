@@ -6,6 +6,9 @@ use crate::error::map_transport_error;
 use crate::streaming::BodyStream;
 use crate::Result;
 
+/// Builds a reqwest request. `HttpRequest::cancellation` is not wired into reqwest; cancellation
+/// is cooperative via [`crate::cancel::execute_or_cancel`] around backend calls and
+/// [`crate::streaming::wrap_cancellation`] on response body streams.
 fn configure_reqwest_builder(client: &Client, request: HttpRequest) -> reqwest::RequestBuilder {
     let HttpRequest {
         method,
@@ -33,6 +36,10 @@ fn configure_reqwest_builder(client: &Client, request: HttpRequest) -> reqwest::
         HttpBody::Empty => {}
         HttpBody::Bytes(body) => {
             builder = builder.body(body);
+        }
+        HttpBody::Stream(stream) => {
+            let stream = stream.map(|result| result.map_err(std::io::Error::other));
+            builder = builder.body(reqwest::Body::wrap_stream(stream));
         }
     }
 

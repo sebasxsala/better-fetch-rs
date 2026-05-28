@@ -11,6 +11,8 @@ impl Endpoint for GetTodo {
     type Response = ();
     type Params = GetTodoParams;
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 fn assert_ready<E: Endpoint>(_: EndpointRequestBuilder<'_, E, Ready>) {}

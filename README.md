@@ -9,7 +9,7 @@ Pick one crate name (same library):
 
 ```toml
 [dependencies]
-better-fetch = "0.3"
+better-fetch = "0.4"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-util = "0.7"
@@ -20,13 +20,13 @@ Aliases on crates.io: [`typed-fetch`](https://crates.io/crates/typed-fetch), [`a
 Optional features (defaults: `json`, `rustls-tls`):
 
 ```toml
-better-fetch = { version = "0.3", features = ["tower", "validate", "multipart"] }
+better-fetch = { version = "0.4", features = ["tower", "validate", "multipart"] }
 ```
 
 Minimal build (pick **one** TLS feature — do not enable `rustls-tls` and `native-tls` together):
 
 ```toml
-better-fetch = { version = "0.3", default-features = false, features = ["json", "rustls-tls"] }
+better-fetch = { version = "0.4", default-features = false, features = ["json", "rustls-tls"] }
 ```
 
 ## Quick start
@@ -68,6 +68,32 @@ async fn main() -> Result<()> {
 ```
 
 For compile-time route definitions (method, path, params, query, response), see [Typed endpoint](#typed-endpoint) below.
+
+## Migrating from 0.3.x to 0.4.0
+
+- **Typed `.query(...)`** — returns `Result`; add `?` before `.send_json()`: `.query(MyQuery { ... })?`.
+- **`ClientConfig::hooks`** — field is no longer public; use [`effective_hooks()`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientConfig.html#method.effective_hooks) for the merged hook chain used at runtime.
+- **`on_request` body** — setting `RequestContext::body` in a hook now updates the outgoing request (previously ignored).
+- **`throw_on_error` + `send_stream`** — non-2xx errors include a peeked body in `Error::Http`, matching buffered `send()`.
+- **`EndpointRequestBuilder`** — no `DerefMut`; use typed `.query(MyQuery)?` instead of stringly `.query("key", "value")` on `Ready`.
+- **`http_service` / `http_service_boxed`** — Tower layers apply to buffered `send()` only; use `transport_stack` for `send_stream()`.
+- **`schema-validate` strict** — query/params wire values are coerced to JSON numbers/bools when possible before JSON Schema checks.
+
+See [CHANGELOG.md](CHANGELOG.md#040---2026-05-27) for the full list.
+
+## When to use `better-fetch` vs reqwest alone
+
+| Use **better-fetch** | Use **reqwest** directly |
+|----------------------|---------------------------|
+| Typed routes (`Endpoint`), plugins, hooks, retries, `throw_on_error` | One-off raw HTTP with minimal deps |
+| Shared client config (base URL, auth, default headers, retry policy) | You already have a custom stack and only need transport |
+| Testing via [`HttpBackend`](https://docs.rs/better-fetch/latest/better_fetch/trait.HttpBackend.html) / [`RecordingBackend`](https://docs.rs/better-fetch/latest/better_fetch/struct.RecordingBackend.html) | Full control of every reqwest option with no abstraction |
+
+better-fetch **is** reqwest under the hood for the default backend; you can pass a custom [`reqwest::Client`](https://docs.rs/reqwest) with [`Client::from_reqwest`](https://docs.rs/better-fetch/latest/better_fetch/struct.Client.html#method.from_reqwest).
+
+**Concurrency:** [`ClientBuilder::max_in_flight`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_in_flight) limits concurrent requests (including retries) inside the client. With `feature = "tower"`, [`ConcurrencyLimitLayer`](https://docs.rs/better-fetch/latest/better_fetch/tower/stack/struct.ConcurrencyLimitLayer.html) caps the transport separately — avoid stacking both at the same numeric limit unless intentional. See [`examples/tower_vs_streaming.rs`](examples/tower_vs_streaming.rs).
+
+See [docs/testing.md](docs/testing.md) (testing), [docs/observability.md](docs/observability.md) (tracing / OTel / miette), and [docs/ROADMAP.md](docs/ROADMAP.md) (internal scope).
 
 ## Highlights
 
@@ -215,6 +241,15 @@ async fn example(client: &Client) -> Result<()> {
 With the `macros` feature, use `#[derive(EndpointParamsDerive)]` and `#[derive(EndpointQueryDerive)]`
 instead of `define_params!` / `impl_serde_endpoint_query!`.
 
+**POST + typed body (`NeedsBody`):** when using `#[derive(Endpoint)]` with `POST` and a non-unit `#[body]`,
+you must call `.json()`, `.with_body()`, or `.body()` before `.send()` / `.send_json()` (see `examples/needs_body.rs`).
+
+**Schema registry:** `#[endpoint(register)]` on `#[derive(Endpoint)]` generates `YourEndpoint::register(&mut SchemaRegistry)`.
+
+With the `schema-validate` feature and a **strict** registry, runtime JSON Schema checks run when schemas are registered for that route: request body, response body (after `send()` or `StreamingResponse::collect()`), query string, and path params. Failures surface as [`Error::SchemaValidation`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.SchemaValidation).
+
+**Macros:** `#[query] MyQuery` on `#[derive(Endpoint)]` implements [`EndpointQuery`](https://docs.rs/better-fetch/latest/better_fetch/trait.EndpointQuery.html) for `MyQuery` (requires `Serialize`). Use `#[query_field]` for inline query fields on the endpoint struct instead.
+
 Typed query example:
 
 ```rust
@@ -226,7 +261,7 @@ struct ListQuery { user_id: Option<u64> }
 impl_serde_endpoint_query!(ListQuery);
 
 // impl Endpoint { type Query = ListQuery; ... }
-// client.call::<ListTodos>().query(ListQuery { user_id: Some(1) }).send_json().await?;
+// client.call::<ListTodos>().query(ListQuery { user_id: Some(1) })?.send_json().await?;
 ```
 
 `.get()` / `.post()` remain available for ad-hoc requests; only `client.call::<E>()` uses the typed builder.
@@ -286,7 +321,7 @@ Wire a custom transport with `ClientBuilder::http_service`, `http_service_boxed`
 
 **Retry on streams:** Status/header retries work as with `send()`. Custom [`RetryPolicy::with_should_retry`](https://docs.rs/better-fetch/latest/better_fetch/struct.RetryPolicy.html) predicates can peek at up to [`retry_body_peek_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.retry_body_peek_bytes) (default 64 KiB, bounded by `max_response_bytes` when set). Without a custom predicate, the body is not read before retrying.
 
-**Tower + streaming:** [`transport_stack`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.transport_stack) wires [`ServiceBackend`](https://docs.rs/better-fetch/latest/better_fetch/tower/struct.ServiceBackend.html) so `send()` uses your Tower stack and `send_stream()` uses the same underlying `reqwest::Client`. Tower request middleware does **not** run on the streaming path — use `on_request` or buffered `send()` if you need that layer for downloads.
+**Tower + streaming:** [`transport_stack`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.transport_stack) wires separate buffered and streaming Tower stacks. Request middleware (e.g. `map_request`) runs on **both** `send()` and `send_stream()` when you configure both inner services in the closure.
 
 **Other notes:**
 
@@ -296,11 +331,21 @@ Wire a custom transport with `ClientBuilder::http_service`, `http_service_boxed`
 
 Optional caps: [`ClientBuilder::max_response_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_response_bytes) and per-request [`.max_response_bytes()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.max_response_bytes) yield [`Error::BodyTooLarge`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.BodyTooLarge) when exceeded.
 
-See [`examples/streaming.rs`](examples/streaming.rs).
+See [`examples/streaming.rs`](examples/streaming.rs), [`examples/buffered_vs_streaming.rs`](examples/buffered_vs_streaming.rs), [`examples/throw_on_error.rs`](examples/throw_on_error.rs), and [`examples/cancel.rs`](examples/cancel.rs).
 
 ### Plugins
 
 `Plugin::init` receives `PreparedRequest` with `url`, `path`, `method`, and `headers` (after auth, before lifecycle hooks). Use it to rewrite URLs or inspect auth headers.
+
+### Logging
+
+[`LoggerPlugin`](https://docs.rs/better-fetch/latest/better_fetch/struct.LoggerPlugin.html) emits `tracing` spans (`http.request`, `http.response`). Install a subscriber in your app, for example:
+
+```rust
+tracing_subscriber::fmt::init();
+```
+
+For OpenTelemetry export via `tracing-opentelemetry`, see [docs/observability.md](docs/observability.md).
 
 ## Features
 
@@ -312,8 +357,14 @@ See [`examples/streaming.rs`](examples/streaming.rs).
 | `multipart` | `RequestBuilder::multipart` + `better_fetch::multipart` re-export |
 | `schema` / `openapi` | `schemars` registry, strict routes, and OpenAPI 3.0 export |
 | `tower` / `tower-http` | Tower `Service` transport stack (`better_fetch::tower`) |
-| `validate` | Response validation with `garde` (`send_json_validated`) |
-| `macros` | `define_params!`, `endpoint!`, `#[derive(EndpointParamsDerive)]`, `#[derive(EndpointQueryDerive)]` |
+| `validate` | Request/response validation with `garde` (`json_validated`, `send_json_validated`) |
+| `schema-validate` | Runtime JSON Schema validation (`jsonschema`) when registry is strict (request/response body, query, params) |
+| `macros` | `#[derive(Endpoint)]`, `define_params!`, `EndpointParamsDerive`, `EndpointQueryDerive` |
+| `miette` | [`DiagnosticError`](https://docs.rs/better-fetch/latest/better_fetch/struct.DiagnosticError.html) — **Cargo feature only** (wrap errors in your app; not a `Plugin`) |
+| `otel` | Re-exports `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry`; see [docs/observability.md](docs/observability.md) |
+| `full` | Enables `json`, `rustls-tls`, `macros`, `schema`, `validate`, `schema-validate`, `miette`, `otel`, `tower`, `multipart`, `openapi` |
+
+Use `better_fetch::prelude::*` for common imports in application code.
 
 See [CHANGELOG.md](https://github.com/sebasxsala/better-fetch-rs/blob/main/CHANGELOG.md) for release notes.
 
@@ -321,12 +372,18 @@ See [CHANGELOG.md](https://github.com/sebasxsala/better-fetch-rs/blob/main/CHANG
 
 ```bash
 cargo run -p better-fetch --example streaming
+cargo run -p better-fetch --example buffered_vs_streaming --features json
+cargo run -p better-fetch --example throw_on_error --features json
+cargo run -p better-fetch --example cancel
 cargo run -p better-fetch --example basic
 cargo run -p better-fetch --example typed_endpoint --features json
 cargo run -p better-fetch --example tower_stack --features tower,json
+cargo run -p better-fetch --example tower_vs_streaming --features tower,json
 cargo run -p better-fetch --example multipart --features multipart
 cargo run -p better-fetch --example retry
 cargo run -p better-fetch --example openapi_export --features openapi
+cargo run -p better-fetch --example upload_stream --features json
+cargo run -p better-fetch --example validated_request --features validate
 cargo test -p better-fetch
 cargo test -p better-fetch --features default,validate,tower,multipart,macros
 ```
@@ -339,6 +396,21 @@ cargo test -p better-fetch --features default,validate,tower,multipart,macros
 | [typed-fetch](https://crates.io/crates/typed-fetch) | Re-export alias |
 | [api-fetch](https://crates.io/crates/api-fetch) | Re-export alias |
 | [better-fetch-macros](https://crates.io/crates/better-fetch-macros) | Proc-macros for typed endpoint params/query |
+
+## Publishing
+
+Push a semver tag matching `version` in the workspace `Cargo.toml`:
+
+```bash
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+That runs [`.github/workflows/release.yml`](.github/workflows/release.yml): CI, crates.io trusted publishing (crates `better-fetch-macros`, `better-fetch`, `typed-fetch`, `api-fetch`), then a GitHub Release with the matching section from [CHANGELOG.md](CHANGELOG.md).
+
+**Trusted publishing (one-time per crate):** on [crates.io](https://crates.io) → crate → **Settings** → **Trusted Publishing** — GitHub owner `sebasxsala`, repository `better-fetch-rs`, workflow `release.yml`, environment `release`. Create the `release` environment on GitHub if you use approval gates. Each crate must have been published manually at least once before trusted publishing works.
+
+**Manual order** (if needed): `cargo publish -p better-fetch-macros`, then `better-fetch`, then `typed-fetch`, then `api-fetch`.
 
 ## License
 

@@ -381,5 +381,5 @@ fn invalid_request_header_returns_error() {
         .header("x-bad", "\n")
         .err()
         .expect("invalid header should fail");
-    assert!(matches!(err, Error::Other(_)));
+    assert!(matches!(err, Error::InvalidHeaderValue(_)));
 }
