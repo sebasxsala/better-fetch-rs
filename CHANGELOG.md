@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API helpers** — `into_api_result` / `send_api`, `ResponseBodyKind`, `RecordingBackend` for tests, `better_fetch::prelude`, `RequestBuilder::base_url`.
 - **Features** — `full`, `miette` (`DiagnosticError`), `otel` (OpenTelemetry re-exports for tracing subscribers).
 - **Errors** — `QuerySerialize`, `RequestValidation`, `SchemaValidation`, `InvalidHeaderName` / `InvalidHeaderValue`, `MissingPathParam`, `SchemaRoute`, `Transport::source`, and clearer `Io` / `Config`.
-- **Docs** — [testing](docs/testing.md), [observability](docs/observability.md), [ROADMAP](docs/ROADMAP.md); publishing notes in README.
+- **Docs** — [testing](docs/testing.md), [observability](docs/observability.md); publishing notes in README.
 
 ### Changed
 

@@ -1,8 +1,9 @@
 //! Typed API routes via the [`Endpoint`] trait.
 //!
 //! Define routes as types, then use [`Client::call`](crate::Client::call) for a typed
-//! [`EndpointRequestBuilder`]. Path and query use [`.params()`](EndpointRequestBuilder::params)
-//! and [`.query()`](EndpointRequestBuilder::query) with structs — not string keys.
+//! [`EndpointRequestBuilder`]. Path params use [`.params()`](EndpointRequestBuilder::params)
+//! with type-state ([`NeedsParams`]); query uses [`.query()`](EndpointRequestBuilder::query)
+//! with structs when you want a query string — **not** enforced by type-state (see [`EndpointQuery`]).
 //!
 //! For ad-hoc string paths, use [`Client::get`](crate::Client::get) instead (see [`RequestBuilder`](crate::RequestBuilder)).
 //!
@@ -37,8 +38,11 @@ pub struct Ready;
 /// Describes a typed API route.
 ///
 /// Implement this trait (or use [`endpoint!`]) and call [`Client::call`](crate::Client::call).
-/// Path and query parameters are typed via [`EndpointParams`] and [`EndpointQuery`] structs;
-/// use [`.params()`](EndpointRequestBuilder::params) and [`.query()`](EndpointRequestBuilder::query).
+///
+/// **Compile-time enforcement:** [`EndpointParams`] can require [`.params()`](EndpointRequestBuilder::params)
+/// via [`NeedsParams`]. [`EndpointBody`] can require a body via [`NeedsBody`] on POST routes.
+/// [`EndpointQuery`] only types query values — [`.query()`](EndpointRequestBuilder::query) is optional
+/// even when `Query` is not [`()`]; the `Default` bound is for struct construction, not auto-apply on send.
 ///
 /// # Examples
 ///
@@ -90,7 +94,10 @@ pub trait Endpoint {
 
     /// Path parameters applied via [`EndpointRequestBuilder::params`].
     type Params: EndpointParams + Default;
-    /// Query parameters applied via [`EndpointRequestBuilder::query`].
+    /// Query parameters serialized by [`EndpointRequestBuilder::query`] when you call it.
+    ///
+    /// Not required at compile time: omitting [`.query()`](EndpointRequestBuilder::query) sends no
+    /// typed query string. Use [`()`] when the route has no query struct.
     type Query: EndpointQuery + Default;
 
     /// Optional typed request body ([`()`] = none).
@@ -179,6 +186,9 @@ impl<E: Endpoint, P: EndpointParams<BuilderState = NeedsParams>> EndpointParamsI
 }
 
 /// Applies path parameters to a [`RequestBuilder`].
+///
+/// Unlike [`EndpointQuery`], this trait participates in type-state: non-unit params use
+/// [`NeedsParams`] so [`.params()`](EndpointRequestBuilder::params) is required before send.
 pub trait EndpointParams: Default + Sized {
     /// When [`NeedsParams`], [`.params()`](EndpointRequestBuilder::params) is required before send.
     type BuilderState;
@@ -211,6 +221,11 @@ impl EndpointParams for Vec<(String, String)> {
 }
 
 /// Applies query parameters to a [`RequestBuilder`].
+///
+/// This trait does **not** use type-state: [`Client::call`](crate::Client::call) does not require
+/// [`.query()`](EndpointRequestBuilder::query) before [`.send_json()`](EndpointRequestBuilder::send_json),
+/// even when `E::Query` is a custom struct. Call [`.query()`](EndpointRequestBuilder::query) explicitly
+/// to serialize `self` onto the request.
 pub trait EndpointQuery {
     /// Applies this type's query map to `builder`.
     fn apply_query(self, builder: RequestBuilder<'_>) -> crate::Result<RequestBuilder<'_>>;
@@ -263,9 +278,10 @@ where
 ///
 /// When `E::Params` is not [`()`], the builder starts in [`NeedsParams`] and requires
 /// [`.params()`](Self::params) before [`.send_json()`](Self::send_json).
+/// When `E::Query` is not [`()`], [`.query()`](Self::query) is still **optional** — it only runs when called.
 ///
-/// After [`.params()`](Self::params), use [`Deref`] to [`RequestBuilder`](crate::RequestBuilder) for
-/// `.query("k", "v")`, `.form(...)`, etc., or the forwarded methods on this type.
+/// In [`Ready`] state, use [`.query(E::Query)`](Self::query) for typed query structs, or the forwarded
+/// methods on this type (`.header`, `.json`, etc.). Prefer typed `.query()` over string keys on [`Deref`].
 #[must_use = "endpoint builders do nothing until you call `.send().await`, `.send_json().await`, or similar"]
 pub struct EndpointRequestBuilder<'a, E: Endpoint, S> {
     pub(crate) inner: RequestBuilder<'a>,
@@ -357,6 +373,9 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
     }
 
     /// Applies typed query parameters for `E::Query`.
+    ///
+    /// Optional at compile time: you can call [`.send_json()`](Self::send_json) without this method;
+    /// no query string from `E::Query` is sent unless you call `.query(...)`.
     ///
     /// Returns [`Error::QuerySerialize`](crate::Error::QuerySerialize) when serde serialization fails
     /// (since 0.4.0 — failures are no longer ignored).
