@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-28
+
+### Added
+
+- **`RequestBuilder::disable_validation`** (feature `schema-validate`) — per-request skip of registry JSON Schema validation (request body, query, params, and response on `send()` or `StreamingResponse::collect()`). Matches TypeScript `disableValidation`. Strict [`ensure_route`](https://docs.rs/better-fetch/latest/better_fetch/schema/struct.SchemaRegistry.html#method.ensure_route) is unchanged. Garde (`validate` feature) is separate — use `validate_response(false)` on `send_json_validated`. Also on [`EndpointRequestBuilder`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html).
+- **`ClientBuilder::wire_concurrency_limit`** — declare the Tower [`ConcurrencyLimitLayer`](https://docs.rs/better-fetch/latest/better_fetch/tower/stack/struct.ConcurrencyLimitLayer.html) limit so `build()` can warn when it matches [`max_in_flight`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_in_flight).
+- **Concurrency build warnings** — `tracing::warn!` when `max_in_flight` is combined with a custom transport stack (`backend`, `http_service`, `transport_stack`, etc.), with a sharper message when client and wire limits are equal.
+- **Cargo feature `sse`** — `SseDecoder`, `parse_sse_events`, `StreamingResponse::sse_events` / `read_sse_events` (included in `full`). Core streaming (`send_stream`, `collect`, etc.) is unchanged without this feature.
+- **Edge-case integration tests** — non-replayable upload streams on retry; `throw_on_error` with large streaming bodies (peek vs drain / `BodyTooLarge`); plugin `init` vs hook order; path/query URL regressions; Tower buffered vs streaming `transport_stack`; cancellation mid-`collect()` and during retry. See [testing — edge-case matrix](docs/testing.md#edge-case-matrix).
+
+### Changed
+
+- **Breaking:** SSE helpers are no longer built by default. Enable `features = ["sse"]` if you use `.sse_events()`, `.read_sse_events()`, or `better_fetch::sse::*` (they were always available in 0.5.0 without a separate feature flag).
+- **`request_pipeline`** — internal refactor only: shared stream body wrapping, peek limit helper, and transport-error handling in the HTTP loop (no public API change).
+
+### Migration (0.5.x → 0.6.0)
+
+```toml
+# Default features unchanged; add "sse" if you use SSE helpers.
+better-fetch = { version = "0.6", features = ["json", "sse"] }
+
+# Optional: declare Tower wire limit for build-time concurrency diagnostics.
+# .wire_concurrency_limit(32)  # when using ConcurrencyLimitLayer::new(32) on transport_stack
+```
+
+If you use strict JSON Schema validation and need to skip it for one call (e.g. debugging or gradual rollout), use `.disable_validation(true)` on that request instead of turning off strict mode on the whole registry.
+
 ## [0.5.0] - 2026-05-28
 
 ### Added
@@ -203,6 +230,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.6.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.6.0
+[0.5.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.3.0
 [0.2.3]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.2.3

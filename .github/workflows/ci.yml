@@ -123,4 +123,4 @@ jobs:
           cargo semver-checks check-release \
             -p better-fetch \
             -p better-fetch-macros \
-            --baseline-version 0.5.0
+            --baseline-version 0.6.0

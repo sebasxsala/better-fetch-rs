@@ -82,6 +82,16 @@ For compile-time route definitions (method, path, params, query, response), see 
 
 See [CHANGELOG.md](CHANGELOG.md#040---2026-05-27) for the full list.
 
+## Migrating from 0.5.x to 0.6.0
+
+- **SSE** — enable Cargo feature `sse` to use `SseDecoder`, `parse_sse_events`, `.sse_events()`, and `.read_sse_events()`. `send_stream()` and the rest of streaming work without it.
+
+```toml
+better-fetch = { version = "0.6", features = ["json", "sse"] }
+```
+
+See [CHANGELOG.md](CHANGELOG.md#060---2026-05-28) for `disable_validation` and other 0.6.0 notes.
+
 ## When to use `better-fetch` vs reqwest alone
 
 | Use **better-fetch** | Use **reqwest** directly |
@@ -263,7 +273,7 @@ you must call `.json()`, `.with_body()`, or `.body()` before `.send()` / `.send_
 
 **Schema registry:** `#[endpoint(register)]` on `#[derive(Endpoint)]` generates `YourEndpoint::register(&mut SchemaRegistry)`.
 
-With the `schema-validate` feature and a **strict** registry, runtime JSON Schema checks run when schemas are registered for that route: request body, response body (after `send()` or `StreamingResponse::collect()`), query string, and path params. Failures surface as [`Error::SchemaValidation`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.SchemaValidation).
+With the `schema-validate` feature and a **strict** registry, runtime JSON Schema checks run when schemas are registered for that route: request body, response body (after `send()` or `StreamingResponse::collect()`), query string, and path params. Failures surface as [`Error::SchemaValidation`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.SchemaValidation). Per-request [`RequestBuilder::disable_validation`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.disable_validation) skips those checks (matches TypeScript `disableValidation`); strict route registration still applies. Garde validation (`validate` feature) is separate — use `validate_response(false)` on `send_json_validated`.
 
 **Macros:** `#[query] MyQuery` on `#[derive(Endpoint)]` implements [`EndpointQuery`](https://docs.rs/better-fetch/latest/better_fetch/trait.EndpointQuery.html) for `MyQuery` (requires `Serialize`). Use `#[query_field]` for inline query fields on the endpoint struct instead.
 
@@ -323,7 +333,7 @@ let client = Client::with_http_client(reqwest, "https://api.example.com")?;
 
 ### Concurrency limits
 
-`ClientBuilder::max_in_flight` uses a tokio semaphore in the core client (counts retries as in-flight work). The `tower` feature’s `ConcurrencyLimitLayer` is a separate transport-level cap. Use **one** of these at a given limit unless you intentionally want two stacked caps (e.g. app-wide budget + per-host transport limit).
+`ClientBuilder::max_in_flight` uses a tokio semaphore in the core client (counts retries as in-flight work). The `tower` feature’s `ConcurrencyLimitLayer` is a separate transport-level cap. Use **one** of these at a given limit unless you intentionally want two stacked caps (e.g. app-wide budget + per-host transport limit). `build()` emits a `tracing` warning when both are configured; call `wire_concurrency_limit(n)` if your Tower stack uses `ConcurrencyLimitLayer::new(n)` so matching limits are called out explicitly.
 
 ### Tower transport (`feature = "tower"`)
 
@@ -338,6 +348,7 @@ Wire a custom transport with `ClientBuilder::http_service`, `http_service_boxed`
 | [`send()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.send) → [`Response`](https://docs.rs/better-fetch/latest/better_fetch/struct.Response.html) | Typical JSON APIs; full body in memory; hooks and retry predicates can inspect the body |
 | [`send_stream()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.send_stream) → [`StreamingResponse`](https://docs.rs/better-fetch/latest/better_fetch/struct.StreamingResponse.html) | Large downloads, chunked bodies, incremental processing |
 | [`collect()`](https://docs.rs/better-fetch/latest/better_fetch/struct.StreamingResponse.html#method.collect) on a stream | Opt back into the buffered `Response` API after streaming |
+| `.sse_events()` / `.read_sse_events()` (feature `sse`) | Server-Sent Events (`text/event-stream`) on top of `send_stream()` |
 
 `send()` buffers the full body in memory by default (reqwest `bytes().await` when no size cap is set). With [`max_response_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_response_bytes), `send()` and `send_json()` read the body through the streaming transport and stop at the limit. `send_stream()` uses `bytes_stream()` and does not buffer until you call `collect()`.
 
@@ -384,9 +395,10 @@ For OpenTelemetry export via `tracing-opentelemetry`, see [docs/observability.md
 | `validate` | Request/response validation with `garde` (`json_validated`, `send_json_validated`) |
 | `schema-validate` | Runtime JSON Schema validation (`jsonschema`) when registry is strict (request/response body, query, params) |
 | `macros` | `#[derive(Endpoint)]`, `define_params!`, `EndpointParamsDerive`, `EndpointQueryDerive` |
+| `sse` | `SseDecoder`, `parse_sse_events`, `StreamingResponse::sse_events` / `read_sse_events` |
 | `miette` | [`DiagnosticError`](https://docs.rs/better-fetch/latest/better_fetch/struct.DiagnosticError.html) — **Cargo feature only** (wrap errors in your app; not a `Plugin`) |
 | `otel` | Re-exports `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry`; see [docs/observability.md](docs/observability.md) |
-| `full` | Enables `json`, `rustls-tls`, `macros`, `schema`, `validate`, `schema-validate`, `miette`, `otel`, `tower`, `multipart`, `openapi` |
+| `full` | Enables `json`, `rustls-tls`, `macros`, `schema`, `validate`, `schema-validate`, `miette`, `otel`, `tower`, `multipart`, `openapi`, `sse` |
 
 Use `better_fetch::prelude::*` for common imports in application code.
 
@@ -426,8 +438,8 @@ cargo test -p better-fetch --features default,validate,tower,multipart,macros
 Push a semver tag matching `version` in the workspace `Cargo.toml`:
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 That runs [`.github/workflows/release.yml`](.github/workflows/release.yml): CI, crates.io trusted publishing (crates `better-fetch-macros`, `better-fetch`, `typed-fetch`, `api-fetch`), then a GitHub Release with the matching section from [CHANGELOG.md](CHANGELOG.md).
