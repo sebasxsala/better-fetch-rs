@@ -3,6 +3,9 @@
 //! Use [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream) for large or chunked
 //! bodies. The buffered [`Response`](crate::Response) from [`RequestBuilder::send`](crate::RequestBuilder::send)
 //! remains the default for JSON APIs.
+//!
+//! With feature `sse`, [`StreamingResponse::sse_events`](StreamingResponse::sse_events) parses
+//! `text/event-stream` bodies incrementally.
 
 use std::path::Path;
 use std::pin::Pin;
@@ -202,6 +205,7 @@ impl StreamingResponse {
     }
 
     /// Buffers the stream (up to `max_bytes`) and parses `text/event-stream` events.
+    #[cfg(feature = "sse")]
     pub async fn read_sse_events(
         self,
         max_bytes: Option<u64>,
@@ -212,6 +216,7 @@ impl StreamingResponse {
     /// Incrementally parses SSE events from the response body as a [`Stream`](futures_util::Stream).
     ///
     /// Respects `max_bytes` when set on the request (same as [`Self::collect`]).
+    #[cfg(feature = "sse")]
     pub fn sse_events(self) -> crate::sse::SseEventStream {
         crate::sse::SseEventStream::new(self.body, self.max_response_bytes)
     }

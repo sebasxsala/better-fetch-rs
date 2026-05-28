@@ -46,6 +46,7 @@
 //! | `miette` | [`DiagnosticError`](crate::miette_diagnostic::DiagnosticError) for labeled error reports |
 //! | `otel` | `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry` re-exports |
 //! | `blocking`, `cookies` | Passed through to reqwest |
+//! | `sse` | SSE (`text/event-stream`) helpers on [`StreamingResponse`](crate::StreamingResponse) |
 //! | `macros` | `#[derive(Endpoint)]`, `EndpointParamsDerive`, `EndpointQueryDerive` |
 //! | `full` | Common optional features bundled for internal apps |
 //!
@@ -116,6 +117,7 @@ mod url_build;
 
 pub mod api_response;
 pub mod prelude;
+#[cfg(feature = "sse")]
 pub mod sse;
 
 pub mod auth;
@@ -193,6 +195,7 @@ pub use response::{Response, ResponseBodyKind};
 pub use retry::{default_should_retry, parse_retry_after, RetryPolicy, ShouldRetryFn};
 #[cfg(feature = "schema")]
 pub use schema::{EndpointSchema, SchemaRegistry};
+#[cfg(feature = "sse")]
 pub use sse::{parse_sse_events, SseDecoder, SseEvent, SseEventStream};
 pub use streaming::{BodyStream, StreamingResponse};
 #[cfg(feature = "json")]

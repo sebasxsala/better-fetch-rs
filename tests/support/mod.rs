@@ -9,7 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use better_fetch::backend::RecordingBackend;
 use better_fetch::backend::{HttpBackend, HttpRequest, HttpResponse, HttpStreamingResponse};
-use better_fetch::{Client, ClientBuilder, Error, Result};
+use better_fetch::{BodyStream, Client, ClientBuilder, Error, Result};
 use bytes::Bytes;
 use futures_util::stream;
 use http::StatusCode;
@@ -71,6 +71,88 @@ pub fn flaky_503_backend() -> (Arc<Flaky503Backend>, Arc<AtomicU32>) {
     (
         Arc::new(Flaky503Backend {
             hits: Arc::clone(&hits),
+        }),
+        hits,
+    )
+}
+
+/// Streaming backend: first chunk immediately, then a long sleep before the next chunk.
+pub struct StalledStreamBackend {
+    pub stall: Duration,
+}
+
+#[async_trait]
+impl HttpBackend for StalledStreamBackend {
+    async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
+        Ok(HttpResponse {
+            status: StatusCode::OK,
+            headers: Default::default(),
+            body: Bytes::from_static(b"ok"),
+        })
+    }
+
+    async fn execute_stream(&self, request: HttpRequest) -> Result<HttpStreamingResponse> {
+        let _ = request;
+        let stall = self.stall;
+        let body: BodyStream = Box::pin(stream::unfold(0u8, move |state| async move {
+            match state {
+                0 => Some((Ok(Bytes::from_static(b"chunk1")), 1)),
+                1 => {
+                    tokio::time::sleep(stall).await;
+                    Some((Ok(Bytes::from_static(b"chunk2")), 2))
+                }
+                _ => None,
+            }
+        }));
+        Ok(HttpStreamingResponse {
+            status: StatusCode::OK,
+            headers: Default::default(),
+            body,
+        })
+    }
+}
+
+/// Returns 503 on the first attempt; later attempts sleep before responding (still 503).
+pub struct SlowFlaky503Backend {
+    pub hits: Arc<AtomicU32>,
+    pub delay_after_first: Duration,
+}
+
+#[async_trait]
+impl HttpBackend for SlowFlaky503Backend {
+    async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
+        let n = self.hits.fetch_add(1, Ordering::SeqCst);
+        if n > 0 {
+            tokio::time::sleep(self.delay_after_first).await;
+        }
+        Ok(HttpResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            headers: Default::default(),
+            body: Bytes::new(),
+        })
+    }
+
+    async fn execute_stream(&self, request: HttpRequest) -> Result<HttpStreamingResponse> {
+        let n = self.hits.fetch_add(1, Ordering::SeqCst);
+        if n > 0 {
+            tokio::time::sleep(self.delay_after_first).await;
+        }
+        let _ = request;
+        Ok(HttpStreamingResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            headers: Default::default(),
+            body: Box::pin(stream::empty()),
+        })
+    }
+}
+
+/// Builds a flaky backend whose second and later attempts block for `delay`.
+pub fn slow_flaky_503_backend(delay: Duration) -> (Arc<SlowFlaky503Backend>, Arc<AtomicU32>) {
+    let hits = Arc::new(AtomicU32::new(0));
+    (
+        Arc::new(SlowFlaky503Backend {
+            hits: Arc::clone(&hits),
+            delay_after_first: delay,
         }),
         hits,
     )

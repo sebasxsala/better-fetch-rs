@@ -37,6 +37,8 @@ pub struct ClientBuilder {
     reqwest_client: Option<ReqwestClient>,
     custom_backend: Option<Arc<dyn HttpBackend>>,
     max_in_flight: Option<usize>,
+    /// Declared Tower [`ConcurrencyLimitLayer`](crate::tower::stack::ConcurrencyLimitLayer) limit for build-time diagnostics.
+    wire_concurrency_limit: Option<usize>,
     max_response_bytes: Option<u64>,
     retry_body_peek_bytes: Option<u64>,
     #[cfg(feature = "schema")]
@@ -59,6 +61,7 @@ impl ClientBuilder {
             reqwest_client: None,
             custom_backend: None,
             max_in_flight: None,
+            wire_concurrency_limit: None,
             max_response_bytes: None,
             retry_body_peek_bytes: None,
             #[cfg(feature = "schema")]
@@ -154,6 +157,21 @@ impl ClientBuilder {
     /// ```
     pub fn backend(mut self, backend: Arc<dyn HttpBackend>) -> Self {
         self.custom_backend = Some(backend);
+        warn_stacked_concurrency_limits(self.max_in_flight, true, self.wire_concurrency_limit);
+        self
+    }
+
+    /// Declares the limit used by [`ConcurrencyLimitLayer`](crate::tower::stack::ConcurrencyLimitLayer)
+    /// on your transport stack so [`Self::build`] can warn when it matches [`Self::max_in_flight`].
+    ///
+    /// This does not configure Tower; it is only for diagnostics when stacking client and transport caps.
+    pub fn wire_concurrency_limit(mut self, limit: usize) -> Self {
+        self.wire_concurrency_limit = Some(limit);
+        warn_stacked_concurrency_limits(
+            self.max_in_flight,
+            self.custom_backend.is_some(),
+            self.wire_concurrency_limit,
+        );
         self
     }
 
@@ -165,6 +183,11 @@ impl ClientBuilder {
     /// (feature `tower`) instead of—or deliberately alongside—this setting.
     pub fn max_in_flight(mut self, limit: usize) -> Self {
         self.max_in_flight = Some(limit);
+        warn_stacked_concurrency_limits(
+            self.max_in_flight,
+            self.custom_backend.is_some(),
+            self.wire_concurrency_limit,
+        );
         self
     }
 
@@ -213,6 +236,7 @@ impl ClientBuilder {
         self.custom_backend = Some(Arc::new(ServiceBackend::buffered_with_reqwest_streaming(
             service, client,
         )));
+        warn_stacked_concurrency_limits(self.max_in_flight, true, self.wire_concurrency_limit);
         self
     }
 
@@ -228,6 +252,7 @@ impl ClientBuilder {
             service,
             crate::tower::ReqwestStreamingHttpService::new(client),
         )));
+        warn_stacked_concurrency_limits(self.max_in_flight, true, self.wire_concurrency_limit);
         self
     }
 
@@ -274,6 +299,7 @@ impl ClientBuilder {
         let client = self.reqwest_client.clone().unwrap_or_default();
         let (buffered, streaming) = crate::tower::stack::build_dual(client, configure);
         self.custom_backend = Some(Arc::new(ServiceBackend::from_boxes(buffered, streaming)));
+        warn_stacked_concurrency_limits(self.max_in_flight, true, self.wire_concurrency_limit);
         self
     }
 
@@ -330,6 +356,12 @@ impl ClientBuilder {
     pub fn build(self) -> Result<Client> {
         let base_url = self.base_url.ok_or(Error::MissingBaseUrl)?;
 
+        warn_stacked_concurrency_limits(
+            self.max_in_flight,
+            self.custom_backend.is_some(),
+            self.wire_concurrency_limit,
+        );
+
         let backend: Arc<dyn HttpBackend> = if let Some(b) = self.custom_backend {
             b
         } else {
@@ -368,5 +400,36 @@ impl ClientBuilder {
 impl Default for ClientBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn warn_stacked_concurrency_limits(
+    max_in_flight: Option<usize>,
+    has_custom_backend: bool,
+    wire_concurrency_limit: Option<usize>,
+) {
+    let Some(client_limit) = max_in_flight else {
+        return;
+    };
+    if !has_custom_backend {
+        return;
+    }
+    if wire_concurrency_limit == Some(client_limit) {
+        tracing::warn!(
+            client_max_in_flight = client_limit,
+            wire_concurrency_limit = client_limit,
+            "max_in_flight and Tower ConcurrencyLimitLayer use the same limit ({client_limit}); \
+             effective throughput is roughly halved because the client semaphore counts hooks and \
+             retries while Tower limits only transport hops. Use one cap or different values intentionally."
+        );
+    } else {
+        tracing::warn!(
+            client_max_in_flight = client_limit,
+            wire_concurrency_limit = ?wire_concurrency_limit,
+            "custom transport stack combined with max_in_flight: the client semaphore applies to the \
+             full request lifecycle (hooks and retries) while Tower ConcurrencyLimitLayer limits only \
+             transport concurrency. Call ClientBuilder::wire_concurrency_limit when your stack uses \
+             ConcurrencyLimitLayer so build() can detect matching numeric limits."
+        );
     }
 }

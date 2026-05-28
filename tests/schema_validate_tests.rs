@@ -422,3 +422,70 @@ async fn strict_registry_rejects_non_json_response_on_stream_collect() -> Result
     ));
     Ok(())
 }
+
+#[tokio::test]
+async fn disable_validation_skips_request_and_response_schema_checks() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/items"))
+        .respond_with(ResponseTemplate::new(201).set_body_string(r#"{"id":"bad"}"#))
+        .mount(&server)
+        .await;
+
+    let mut registry = SchemaRegistry::new().strict(true);
+    registry.register_endpoint(
+        "/items",
+        Method::POST,
+        Some(schemars::schema_for!(CreateItem)),
+        Some(schemars::schema_for!(ItemResponse)),
+    );
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .schema_registry(Arc::new(registry))
+        .build()?;
+
+    let response = client
+        .post("/items")
+        .json(&serde_json::json!({ "title": 1 }))?
+        .disable_validation(true)
+        .send()
+        .await?;
+
+    assert!(response.is_success());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disable_validation_skips_stream_collect_response_schema() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"id":"not-a-number"}"#))
+        .mount(&server)
+        .await;
+
+    let mut registry = SchemaRegistry::new().strict(true);
+    registry.register_endpoint(
+        "/items/:id",
+        Method::GET,
+        None,
+        Some(schemars::schema_for!(ItemResponse)),
+    );
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .schema_registry(Arc::new(registry))
+        .build()?;
+
+    let stream = client
+        .get("/items/:id")
+        .param("id", "1")
+        .disable_validation(true)
+        .send_stream()
+        .await?;
+
+    let response = stream.collect().await?;
+    assert_eq!(response.bytes().as_ref(), br#"{"id":"not-a-number"}"#);
+    Ok(())
+}

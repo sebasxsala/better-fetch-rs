@@ -1,5 +1,7 @@
 //! Server-Sent Events (`text/event-stream`) helpers for [`StreamingResponse`](crate::StreamingResponse).
 //!
+//! Enable with Cargo feature `sse` on the `better-fetch` crate.
+//!
 //! Use [`SseDecoder`] for incremental parsing, [`parse_sse_events`] for complete buffers, or
 //! [`StreamingResponse::read_sse_events`](crate::StreamingResponse::read_sse_events) to buffer first.
 

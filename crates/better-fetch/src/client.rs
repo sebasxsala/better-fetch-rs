@@ -249,6 +249,8 @@ impl Client {
             json_parser: None,
             #[cfg(feature = "validate")]
             validate_response: true,
+            #[cfg(feature = "schema-validate")]
+            disable_validation: false,
             max_response_bytes: None,
             retry_body_peek_bytes: None,
         }

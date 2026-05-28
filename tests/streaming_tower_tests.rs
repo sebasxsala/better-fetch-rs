@@ -129,3 +129,97 @@ async fn http_service_does_not_override_send_stream_transport() -> Result<()> {
     assert_eq!(streamed, "from-wiremock");
     Ok(())
 }
+
+#[tokio::test]
+async fn transport_stack_buffered_only_send_stream_uses_reqwest() -> Result<()> {
+    use better_fetch::backend::{HttpRequest, HttpResponse};
+    use bytes::Bytes;
+    use http::StatusCode;
+    use tower::service_fn;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/stack-split"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("from-wiremock"))
+        .mount(&server)
+        .await;
+
+    let stub = service_fn(|_req: HttpRequest| async {
+        Ok::<_, better_fetch::Error>(HttpResponse {
+            status: StatusCode::OK,
+            headers: http::HeaderMap::new(),
+            body: Bytes::from_static(b"from-buffered-stack"),
+        })
+    });
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .transport_stack(|_buffered, streaming| {
+            (
+                ServiceBuilder::new().service(stub).into_box(),
+                ServiceBuilder::new()
+                    .service(streaming)
+                    .into_streaming_box(),
+            )
+        })
+        .build()?;
+
+    let buffered = client.get("/stack-split").send().await?.text().await?;
+    assert_eq!(buffered, "from-buffered-stack");
+
+    let streamed = client
+        .get("/stack-split")
+        .send_stream()
+        .await?
+        .collect()
+        .await?
+        .into_text()?;
+    assert_eq!(streamed, "from-wiremock");
+    Ok(())
+}
+
+#[tokio::test]
+async fn transport_stack_map_header_only_on_buffered_send() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/stack-header"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .transport_stack(|buffered, streaming| {
+            let map_header = |mut req: HttpRequest| {
+                req.headers.insert(
+                    http::HeaderName::from_static("x-buffered-only"),
+                    http::HeaderValue::from_static("1"),
+                );
+                req
+            };
+            (
+                ServiceBuilder::new()
+                    .map_request(map_header)
+                    .service(buffered)
+                    .into_box(),
+                ServiceBuilder::new()
+                    .service(streaming)
+                    .into_streaming_box(),
+            )
+        })
+        .build()?;
+
+    let _ = client.get("/stack-header").send().await?;
+    let _ = client
+        .get("/stack-header")
+        .send_stream()
+        .await?
+        .collect()
+        .await?;
+
+    let received = server.received_requests().await.expect("wiremock requests");
+    assert_eq!(received.len(), 2);
+    assert!(received[0].headers.contains_key("x-buffered-only"));
+    assert!(!received[1].headers.contains_key("x-buffered-only"));
+    Ok(())
+}

@@ -80,6 +80,10 @@ where
 }
 
 /// Convenience: concurrency limit on the transport stack.
+///
+/// When combining this with [`ClientBuilder::max_in_flight`](crate::ClientBuilder::max_in_flight),
+/// call [`ClientBuilder::wire_concurrency_limit`](crate::ClientBuilder::wire_concurrency_limit)
+/// with the same `max_in_flight` value so `build()` can warn if both caps use identical limits.
 pub fn with_concurrency_limit(client: reqwest::Client, max_in_flight: usize) -> BoxHttpService {
     build(client, |inner| {
         ServiceBuilder::new()

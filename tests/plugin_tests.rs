@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use better_fetch::{Client, Hooks, LoggerPlugin, Plugin, PreparedRequest, Result};
+use better_fetch::backend::{RecordedBodyKind, RecordingBackend};
+use better_fetch::{Client, Hooks, LoggerPlugin, Plugin, PreparedRequest, RequestContext, Result};
+use bytes::Bytes;
 use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -150,5 +152,168 @@ async fn multiple_plugins_hooks_merge_in_order() -> Result<()> {
 
     client.get("/multi").send().await?;
     assert_eq!(log.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+struct InitMarkerPlugin {
+    stage: Arc<AtomicUsize>,
+    value: usize,
+}
+
+#[async_trait]
+impl Plugin for InitMarkerPlugin {
+    fn id(&self) -> &'static str {
+        "init-marker"
+    }
+
+    async fn init(&self, prepared: &mut PreparedRequest) -> Result<()> {
+        self.stage.store(self.value, Ordering::SeqCst);
+        prepared
+            .headers
+            .insert("x-plugin-init", http::HeaderValue::from_static("1"));
+        Ok(())
+    }
+}
+
+struct HookMarkerPlugin {
+    id: &'static str,
+    stage: Arc<AtomicUsize>,
+    value: usize,
+    set_header: Option<&'static str>,
+    body: Option<&'static [u8]>,
+}
+
+#[async_trait]
+impl Plugin for HookMarkerPlugin {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn hooks(&self) -> Hooks {
+        let stage = self.stage.clone();
+        let value = self.value;
+        let set_header = self.set_header;
+        let body = self.body.map(Bytes::from_static);
+        Hooks::new().on_request(move |mut ctx| {
+            let stage = stage.clone();
+            let body = body.clone();
+            async move {
+                stage.store(value, Ordering::SeqCst);
+                if let Some(name) = set_header {
+                    ctx.headers
+                        .insert(name, http::HeaderValue::from_static("plugin"));
+                }
+                if let Some(bytes) = body {
+                    ctx.body = Some(bytes);
+                }
+                Ok(ctx)
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn plugin_init_before_client_hook_before_plugin_hook() -> Result<()> {
+    use better_fetch::ClientBuilder;
+    use wiremock::matchers::{body_string, header};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/order"))
+        .and(header("x-plugin-init", "1"))
+        .and(header("x-order", "plugin"))
+        .and(body_string("plugin-body"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let stage = Arc::new(AtomicUsize::new(0));
+    let stage_init = stage.clone();
+    let stage_client = stage.clone();
+    let stage_plugin = stage.clone();
+
+    let client_hooks = Hooks::new().on_request(move |mut ctx| {
+        let stage_client = stage_client.clone();
+        async move {
+            assert_eq!(stage_client.load(Ordering::SeqCst), 1);
+            stage_client.store(2, Ordering::SeqCst);
+            ctx.headers
+                .insert("x-order", http::HeaderValue::from_static("client"));
+            Ok(ctx)
+        }
+    });
+
+    let inner = Arc::new(better_fetch::ReqwestBackend::new(reqwest::Client::new()));
+    let recording = Arc::new(RecordingBackend::new(inner));
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .backend(recording.clone())
+        .hooks(client_hooks)
+        .plugin(InitMarkerPlugin {
+            stage: stage_init,
+            value: 1,
+        })
+        .plugin(HookMarkerPlugin {
+            id: "hook-b",
+            stage: stage_plugin,
+            value: 3,
+            set_header: Some("x-order"),
+            body: Some(b"plugin-body"),
+        })
+        .build()?;
+
+    client
+        .post("/order")
+        .body(Bytes::from_static(b"ignored"))
+        .send()
+        .await?;
+
+    assert_eq!(stage.load(Ordering::SeqCst), 3);
+    let recorded = recording
+        .last_recorded()
+        .expect("request should be recorded");
+    assert_eq!(
+        recorded.body,
+        RecordedBodyKind::Bytes(Bytes::from_static(b"plugin-body"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_hooks_run_before_plugin_hooks() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/hook-order"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let log = Arc::new(AtomicUsize::new(0));
+    let client_hooks = Hooks::new().on_request({
+        let log = log.clone();
+        move |ctx: RequestContext| {
+            let log = log.clone();
+            async move {
+                log.store(1, Ordering::SeqCst);
+                Ok(ctx)
+            }
+        }
+    });
+
+    let client = Client::builder()
+        .base_url(server.uri())?
+        .hooks(client_hooks)
+        .plugin(OrderPlugin {
+            id: "first",
+            log: log.clone(),
+        })
+        .plugin(OrderPlugin {
+            id: "second",
+            log: log.clone(),
+        })
+        .build()?;
+
+    client.get("/hook-order").send().await?;
+    assert_eq!(log.load(Ordering::SeqCst), 3);
     Ok(())
 }

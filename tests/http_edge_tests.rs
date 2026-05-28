@@ -162,3 +162,80 @@ async fn throw_on_error_includes_body_streaming() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn throw_on_error_stream_large_body_errors_body_too_large() -> Result<()> {
+    let server = MockServer::start().await;
+    let payload = vec![b'x'; 200 * 1024];
+    Mock::given(method("GET"))
+        .and(path("/large-404"))
+        .respond_with(ResponseTemplate::new(404).set_body_bytes(payload))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri())?;
+    let err = client
+        .get("/large-404")
+        .throw_on_error(true)
+        .send_stream()
+        .await
+        .unwrap_err();
+
+    assert!(err.is_body_too_large());
+    assert_eq!(err.body_too_large_limit(), Some(64 * 1024));
+    Ok(())
+}
+
+#[tokio::test]
+async fn throw_on_error_stream_http_error_body_is_peek_prefix() -> Result<()> {
+    let server = MockServer::start().await;
+    let mut payload = vec![0u8; 1024];
+    payload[..7].copy_from_slice(b"PEEKED!");
+    Mock::given(method("GET"))
+        .and(path("/peek-err"))
+        .respond_with(ResponseTemplate::new(404).set_body_bytes(payload))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri())?;
+    let err = client
+        .get("/peek-err")
+        .max_response_bytes(1024)
+        .throw_on_error(true)
+        .send_stream()
+        .await
+        .unwrap_err();
+
+    match &err {
+        Error::Http { body: Some(b), .. } => {
+            assert_eq!(b.len(), 1024);
+            assert_eq!(&b[..7], b"PEEKED!");
+        }
+        other => panic!("expected Http with peeked body, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn throw_on_error_buffered_large_body_respects_max_response_bytes() -> Result<()> {
+    let server = MockServer::start().await;
+    let body = "x".repeat(4096);
+    Mock::given(method("GET"))
+        .and(path("/large-err"))
+        .respond_with(ResponseTemplate::new(404).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri())?;
+    let err = client
+        .get("/large-err")
+        .max_response_bytes(1024)
+        .throw_on_error(true)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(err.is_body_too_large());
+    assert_eq!(err.body_too_large_limit(), Some(1024));
+    Ok(())
+}

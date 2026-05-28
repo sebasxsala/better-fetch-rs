@@ -80,19 +80,41 @@ async fn plus_and_percent_in_query_value() -> Result<()> {
 }
 
 #[tokio::test]
-async fn embedded_query_overridden_by_builder_query() -> Result<()> {
+async fn embedded_query_merged_with_builder_query() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/search"))
-        .and(query_param("tag", "override"))
+        .and(path("/items/1"))
+        .and(query_param("sort", "desc"))
         .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri())?;
     assert!(client
-        .get("/search?tag=embedded")
-        .query("tag", "override")
+        .get("/items/1?sort=asc")
+        .query("sort", "desc")
+        .send()
+        .await?
+        .is_success());
+    Ok(())
+}
+
+#[tokio::test]
+async fn path_param_with_embedded_query_and_extra_builder_param() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items/1"))
+        .and(query_param("sort", "asc"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri())?;
+    assert!(client
+        .get("/items/:id?sort=asc")
+        .param("id", "1")
+        .query("page", "2")
         .send()
         .await?
         .is_success());

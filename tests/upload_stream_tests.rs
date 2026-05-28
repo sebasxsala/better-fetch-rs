@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -95,6 +95,40 @@ async fn stream_body_with_retry_returns_non_replayable() -> Result<()> {
         .unwrap_err();
 
     assert!(matches!(err, Error::NonReplayableBody));
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_upload_retry_only_one_wiremock_hit() -> Result<()> {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicU32::new(0));
+    let attempts_cb = attempts.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/stream-flaky"))
+        .respond_with(move |_: &wiremock::Request| {
+            attempts_cb.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(503)
+        })
+        .mount(&server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .retry(better_fetch::RetryPolicy::count(1))
+        .build()?;
+
+    let stream: better_fetch::BodyStream =
+        Box::pin(stream::iter(vec![Ok(Bytes::from_static(b"payload"))]));
+    let err = client
+        .post("/stream-flaky")
+        .body_stream(stream)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, Error::NonReplayableBody));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

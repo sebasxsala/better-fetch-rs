@@ -15,6 +15,30 @@ use tower::service_fn;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[test]
+fn build_succeeds_with_stacked_concurrency_limits() {
+    use better_fetch::backend::HttpRequest;
+    use tower::service_fn;
+
+    let service = service_fn(|_req: HttpRequest| async {
+        Ok::<_, Error>(HttpResponse {
+            status: StatusCode::OK,
+            headers: http::HeaderMap::new(),
+            body: Bytes::from_static(b"ok"),
+        })
+    });
+
+    let client = ClientBuilder::new()
+        .base_url("http://localhost")
+        .unwrap()
+        .max_in_flight(4)
+        .wire_concurrency_limit(4)
+        .http_service(service)
+        .build();
+
+    assert!(client.is_ok());
+}
+
 #[tokio::test]
 async fn http_service_with_service_fn() -> Result<()> {
     let service = service_fn(|_req: HttpRequest| async {

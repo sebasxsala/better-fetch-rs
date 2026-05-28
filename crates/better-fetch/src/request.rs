@@ -65,6 +65,9 @@ pub struct RequestBuilder<'a> {
     pub(crate) json_parser: Option<JsonParserFn>,
     #[cfg(feature = "validate")]
     pub(crate) validate_response: bool,
+    /// When `true`, skip registry JSON Schema validation for this request (feature `schema-validate`).
+    #[cfg(feature = "schema-validate")]
+    pub(crate) disable_validation: bool,
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -405,6 +408,19 @@ impl<'a> RequestBuilder<'a> {
     #[must_use = "send the request with `.await` and handle the result"]
     pub async fn send_json<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         self.send().await?.json::<T>().await
+    }
+
+    /// When `true`, skip registry JSON Schema validation for this request (request body, query,
+    /// params, and response on `send()` / [`StreamingResponse::collect`](crate::StreamingResponse::collect)).
+    ///
+    /// Strict [`SchemaRegistry::ensure_route`](crate::schema::SchemaRegistry::ensure_route) still runs.
+    /// Does not affect garde ([`validate_response`](Self::validate_response) on `send_json_validated`).
+    ///
+    /// Matches upstream TypeScript `disableValidation` (feature `schema-validate`).
+    #[cfg(feature = "schema-validate")]
+    pub fn disable_validation(mut self, disable: bool) -> Self {
+        self.disable_validation = disable;
+        self
     }
 
     /// When `false`, [`send_json_validated`](Self::send_json_validated) only deserializes (no garde).

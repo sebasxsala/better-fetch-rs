@@ -52,7 +52,7 @@ let client = ClientBuilder::new()
     .build()?;
 ```
 
-Integration tests can share helpers from `tests/support/mod.rs` (`recording_client`, `slow_backend`, `flaky_503_backend`).
+Integration tests can share helpers from `tests/support/mod.rs` (`recording_client`, `slow_backend`, `flaky_503_backend`, `slow_flaky_503_backend`, `StalledStreamBackend`).
 
 Use [`last_recorded`](https://docs.rs/better-fetch/latest/better_fetch/struct.RecordingBackend.html#method.last_recorded) and [`RecordedBodyKind::Stream`](https://docs.rs/better-fetch/latest/better_fetch/enum.RecordedBodyKind.html) to assert upload streams without buffering the full body. [`last_request`](https://docs.rs/better-fetch/latest/better_fetch/struct.RecordingBackend.html#method.last_request) clones streaming bodies as empty.
 
@@ -64,6 +64,24 @@ Automatic retry cannot resend:
 - `multipart` bodies (feature `multipart`)
 
 The client returns [`Error::NonReplayableBody`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.NonReplayableBody) on the second attempt.
+
+## Edge-case matrix
+
+| Scenario | Test file | Representative test |
+|----------|-----------|---------------------|
+| Retry + non-replayable upload stream | `tests/upload_stream_tests.rs`, `tests/retry_edge_tests.rs` | `stream_body_with_retry_returns_non_replayable`, `stream_upload_retry_only_one_wiremock_hit` |
+| `throw_on_error` + large response (peek / drain) | `tests/http_edge_tests.rs` | `throw_on_error_stream_large_body_errors_body_too_large`, `throw_on_error_stream_http_error_body_is_peek_prefix` |
+| Plugin `init` vs client vs plugin `on_request` | `tests/plugin_tests.rs` | `plugin_init_before_client_hook_before_plugin_hook` |
+| Embedded query in path + builder `.query()` | `tests/url_edge_tests.rs` | `embedded_query_merged_with_builder_query`, `path_param_with_embedded_query_and_extra_builder_param` |
+| Tower buffered vs streaming transport | `tests/streaming_tower_tests.rs` (feature `tower`) | `transport_stack_buffered_only_send_stream_uses_reqwest` |
+| Cancel mid-collect / mid-retry request | `tests/cancel_tests.rs`, `tests/retry_cancel_tests.rs` | `cancellation_mid_collect_returns_cancelled`, `cancellation_during_second_retry_request_returns_cancelled` |
+
+Run the full integration suite:
+
+```bash
+cargo test -p better-fetch
+cargo test -p better-fetch --features tower
+```
 
 ## wiremock
 

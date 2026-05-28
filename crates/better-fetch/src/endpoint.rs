@@ -506,6 +506,15 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
         }
     }
 
+    /// Skips registry JSON Schema validation for this request ([`RequestBuilder::disable_validation`](crate::RequestBuilder::disable_validation)).
+    #[cfg(feature = "schema-validate")]
+    pub fn disable_validation(self, disable: bool) -> Self {
+        Self {
+            inner: self.inner.disable_validation(disable),
+            _marker: PhantomData,
+        }
+    }
+
     /// JSON request body ([`RequestBuilder::json`](crate::RequestBuilder::json)).
     #[cfg(feature = "json")]
     pub fn json<T: serde::Serialize>(self, body: &T) -> crate::Result<Self> {

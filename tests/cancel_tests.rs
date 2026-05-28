@@ -2,6 +2,7 @@
 mod support;
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use better_fetch::{CancellationToken, ClientBuilder, Result};
@@ -50,6 +51,37 @@ async fn cancellation_during_retry_sleep_returns_cancelled() -> Result<()> {
 
     let task =
         tokio::spawn(async move { client.get("/flaky").cancellation_token(token).send().await });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    cancel.cancel();
+
+    let err = task.await.unwrap().unwrap_err();
+    assert!(err.is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_mid_collect_returns_cancelled() -> Result<()> {
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    let backend = Arc::new(support::StalledStreamBackend {
+        stall: Duration::from_secs(5),
+    });
+
+    let client = ClientBuilder::new()
+        .base_url("http://localhost")?
+        .backend(backend)
+        .build()?;
+
+    let task = tokio::spawn(async move {
+        client
+            .get("/stall")
+            .cancellation_token(token)
+            .send_stream()
+            .await?
+            .collect()
+            .await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     cancel.cancel();

@@ -94,6 +94,8 @@ pub(crate) struct PreparedExecution {
     pub route_path: String,
     #[cfg(feature = "schema")]
     pub schema_registry: Option<std::sync::Arc<crate::schema::SchemaRegistry>>,
+    #[cfg(feature = "schema-validate")]
+    pub disable_validation: bool,
 }
 
 pub(crate) async fn prepare_execution(
@@ -178,48 +180,60 @@ pub(crate) async fn prepare_execution(
     };
 
     #[cfg(feature = "schema-validate")]
-    if let Some(registry) = &config.schema_registry {
-        if registry.is_strict() && registry.request_schema(&builder.path, &method).is_some() {
-            match &request_body {
-                HttpBody::Bytes(bytes) if bytes.is_empty() => {
-                    crate::schema_validate::validate_request(
-                        registry,
-                        &builder.path,
-                        &method,
-                        &serde_json::Value::Null,
-                    )?;
-                }
-                HttpBody::Bytes(bytes) => {
-                    let value: serde_json::Value =
-                        serde_json::from_slice(bytes).map_err(|e| Error::SchemaValidation {
+    if !builder.disable_validation {
+        if let Some(registry) = &config.schema_registry {
+            if registry.is_strict() && registry.request_schema(&builder.path, &method).is_some() {
+                match &request_body {
+                    HttpBody::Bytes(bytes) if bytes.is_empty() => {
+                        crate::schema_validate::validate_request(
+                            registry,
+                            &builder.path,
+                            &method,
+                            &serde_json::Value::Null,
+                        )?;
+                    }
+                    HttpBody::Bytes(bytes) => {
+                        let value: serde_json::Value =
+                            serde_json::from_slice(bytes).map_err(|e| Error::SchemaValidation {
+                                phase: "request",
+                                message: format!("request body is not JSON: {e}"),
+                            })?;
+                        crate::schema_validate::validate_request(
+                            registry,
+                            &builder.path,
+                            &method,
+                            &value,
+                        )?;
+                    }
+                    HttpBody::Empty => {
+                        crate::schema_validate::validate_request(
+                            registry,
+                            &builder.path,
+                            &method,
+                            &serde_json::Value::Null,
+                        )?;
+                    }
+                    HttpBody::Stream(_) => {
+                        return Err(Error::SchemaValidation {
                             phase: "request",
-                            message: format!("request body is not JSON: {e}"),
-                        })?;
-                    crate::schema_validate::validate_request(
-                        registry,
-                        &builder.path,
-                        &method,
-                        &value,
-                    )?;
-                }
-                HttpBody::Empty => {
-                    crate::schema_validate::validate_request(
-                        registry,
-                        &builder.path,
-                        &method,
-                        &serde_json::Value::Null,
-                    )?;
-                }
-                HttpBody::Stream(_) => {
-                    return Err(Error::SchemaValidation {
-                        phase: "request",
-                        message: "request schema registered but body is a stream".into(),
-                    });
+                            message: "request schema registered but body is a stream".into(),
+                        });
+                    }
                 }
             }
+            crate::schema_validate::validate_params(
+                registry,
+                &builder.path,
+                &method,
+                &builder.params,
+            )?;
+            crate::schema_validate::validate_query(
+                registry,
+                &builder.path,
+                &method,
+                &builder.query,
+            )?;
         }
-        crate::schema_validate::validate_params(registry, &builder.path, &method, &builder.params)?;
-        crate::schema_validate::validate_query(registry, &builder.path, &method, &builder.query)?;
     }
 
     Ok(PreparedExecution {
@@ -247,6 +261,8 @@ pub(crate) async fn prepare_execution(
         route_path: builder.path.clone(),
         #[cfg(feature = "schema")]
         schema_registry: config.schema_registry.clone(),
+        #[cfg(feature = "schema-validate")]
+        disable_validation: builder.disable_validation,
     })
 }
 
@@ -284,6 +300,9 @@ fn build_http_request(prep: &mut PreparedExecution, body: HttpBody) -> HttpReque
 
 #[cfg(feature = "schema-validate")]
 fn maybe_validate_response(prep: &PreparedExecution, response: &Response) -> Result<()> {
+    if prep.disable_validation {
+        return Ok(());
+    }
     let Some(registry) = prep.schema_registry.as_ref() else {
         return Ok(());
     };
@@ -299,6 +318,9 @@ fn maybe_validate_response(prep: &PreparedExecution, response: &Response) -> Res
 fn stream_response_schema_ctx(
     prep: &PreparedExecution,
 ) -> Option<crate::schema_validate::StreamResponseSchemaCtx> {
+    if prep.disable_validation {
+        return None;
+    }
     let registry = prep.schema_registry.as_ref()?;
     if !registry.is_strict() {
         return None;
@@ -317,6 +339,17 @@ fn stream_peek_limit(prep: &PreparedExecution) -> u64 {
         .unwrap_or(prep.retry_body_peek_bytes)
 }
 
+fn wrap_stream_body(body: BodyStream, prep: &PreparedExecution) -> BodyStream {
+    let mut body = body;
+    if let Some(limit) = prep.max_response_bytes {
+        body = wrap_max_bytes(body, limit);
+    }
+    if let Some(token) = prep.cancel.clone() {
+        body = wrap_cancellation(body, token);
+    }
+    body
+}
+
 async fn finish_stream_http_status(
     prep: &PreparedExecution,
     status: StatusCode,
@@ -327,7 +360,7 @@ async fn finish_stream_http_status(
 ) -> Result<LoopOutput> {
     let peek_limit = stream_peek_limit(prep);
 
-    let (peeked, mut body) = match peeked_body {
+    let (peeked, body) = match peeked_body {
         Some(peeked) => (peeked, body),
         None => {
             let (peeked, rest) = peek_stream_prefix(body, peek_limit).await?;
@@ -363,12 +396,7 @@ async fn finish_stream_http_status(
         return Err(http_err);
     }
 
-    if let Some(limit) = prep.max_response_bytes {
-        body = wrap_max_bytes(body, limit);
-    }
-    if let Some(token) = prep.cancel.clone() {
-        body = wrap_cancellation(body, token);
-    }
+    let body = wrap_stream_body(body, prep);
 
     Ok(LoopOutput::Stream(StreamingResponse::new(
         status,
@@ -488,6 +516,37 @@ enum TransportErrorAction {
     Return(Error),
 }
 
+enum LoopTransportOutcome {
+    Retry,
+    Return(Error),
+}
+
+async fn handle_loop_transport_error(
+    prep: &PreparedExecution,
+    request_url: &Url,
+    err: Error,
+    attempt: u32,
+    max_attempts: u32,
+) -> Result<LoopTransportOutcome> {
+    match handle_transport_error(
+        &prep.merged_hooks,
+        &prep.req_ctx,
+        request_url,
+        err,
+        attempt,
+        max_attempts,
+        prep.retry_policy.as_ref(),
+        prep.cancel.as_ref(),
+        #[cfg(feature = "json")]
+        prep.json_parser.clone(),
+    )
+    .await?
+    {
+        TransportErrorAction::Retry => Ok(LoopTransportOutcome::Retry),
+        TransportErrorAction::Return(e) => Ok(LoopTransportOutcome::Return(e)),
+    }
+}
+
 enum StreamRetryAction {
     Retry,
     Continue {
@@ -513,10 +572,7 @@ async fn evaluate_stream_retry(
         });
     };
 
-    let peek_limit = prep
-        .max_response_bytes
-        .map(|m| m.min(prep.retry_body_peek_bytes))
-        .unwrap_or(prep.retry_body_peek_bytes);
+    let peek_limit = stream_peek_limit(prep);
 
     if policy.has_custom_should_retry() {
         let (peeked, rest) = peek_stream_prefix(body, peek_limit).await?;
@@ -694,25 +750,20 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                         }
                         return Ok(LoopOutput::Buffered(response));
                     }
-                    Err(err) => match handle_transport_error(
-                        &prep.merged_hooks,
-                        &prep.req_ctx,
+                    Err(err) => match handle_loop_transport_error(
+                        &prep,
                         &request_url,
                         err,
                         attempt,
                         max_attempts,
-                        prep.retry_policy.as_ref(),
-                        cancel_ref,
-                        #[cfg(feature = "json")]
-                        prep.json_parser.clone(),
                     )
                     .await?
                     {
-                        TransportErrorAction::Retry => {
+                        LoopTransportOutcome::Retry => {
                             attempt += 1;
                             continue;
                         }
-                        TransportErrorAction::Return(e) => return Err(e),
+                        LoopTransportOutcome::Return(e) => return Err(e),
                     },
                 }
             }
@@ -760,10 +811,7 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                                 .await?;
                                 continue;
                             }
-                            StreamRetryAction::Continue {
-                                mut body,
-                                peeked_body,
-                            } => {
+                            StreamRetryAction::Continue { body, peeked_body } => {
                                 let meta = prep
                                     .merged_hooks
                                     .run_on_response_stream(StreamingResponseContext {
@@ -787,12 +835,7 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                                     .await;
                                 }
 
-                                if let Some(limit) = prep.max_response_bytes {
-                                    body = wrap_max_bytes(body, limit);
-                                }
-                                if let Some(token) = prep.cancel.clone() {
-                                    body = wrap_cancellation(body, token);
-                                }
+                                let body = wrap_stream_body(body, &prep);
 
                                 if status.is_success() {
                                     prep.merged_hooks
@@ -818,25 +861,20 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                             }
                         }
                     }
-                    Err(err) => match handle_transport_error(
-                        &prep.merged_hooks,
-                        &prep.req_ctx,
+                    Err(err) => match handle_loop_transport_error(
+                        &prep,
                         &request_url,
                         err,
                         attempt,
                         max_attempts,
-                        prep.retry_policy.as_ref(),
-                        cancel_ref,
-                        #[cfg(feature = "json")]
-                        prep.json_parser.clone(),
                     )
                     .await?
                     {
-                        TransportErrorAction::Retry => {
+                        LoopTransportOutcome::Retry => {
                             attempt += 1;
                             continue;
                         }
-                        TransportErrorAction::Return(e) => return Err(e),
+                        LoopTransportOutcome::Return(e) => return Err(e),
                     },
                 }
             }

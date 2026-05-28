@@ -26,6 +26,8 @@ macros = ["dep:better-fetch-macros"]
 validate = ["json", "dep:garde"]
 schema-validate = ["schema", "dep:jsonschema", "json"]
 miette = ["dep:miette"]
+## Server-Sent Events (`text/event-stream`) parsing on [`StreamingResponse`](crate::StreamingResponse).
+sse = []
 ## Re-exports `opentelemetry`, `opentelemetry_sdk`, `tracing_opentelemetry` (no OTLP exporter bundled).
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 ## All common optional features for internal apps (`better_fetch::prelude` + full API surface).
@@ -41,6 +43,7 @@ full = [
     "tower",
     "multipart",
     "openapi",
+    "sse",
 ]
 
 [dependencies]
@@ -248,6 +251,7 @@ path = "../../tests/stream_to_file_tests.rs"
 [[test]]
 name = "sse_tests"
 path = "../../tests/sse_tests.rs"
+required-features = ["sse", "json"]
 
 [[test]]
 name = "hooks_error_context_tests"

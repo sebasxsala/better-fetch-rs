@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use better_fetch::{parse_retry_after, ClientBuilder, Result, RetryPolicy};
+use better_fetch::{parse_retry_after, ClientBuilder, Error, Result, RetryPolicy};
+use bytes::Bytes;
+use futures_util::stream;
 use http::HeaderMap;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -67,6 +69,33 @@ async fn retries_408_request_timeout() -> Result<()> {
 
     assert!(client.get("/timeout").send().await?.is_success());
     assert!(counter.load(Ordering::SeqCst) >= 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn retry_after_503_with_stream_body_is_non_replayable() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/upload-retry"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .retry(RetryPolicy::count(1))
+        .build()?;
+
+    let body: better_fetch::BodyStream =
+        Box::pin(stream::iter(vec![Ok(Bytes::from_static(b"data"))]));
+    let err = client
+        .put("/upload-retry")
+        .body_stream(body)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, Error::NonReplayableBody));
     Ok(())
 }
 
