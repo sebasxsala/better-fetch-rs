@@ -53,10 +53,7 @@ impl SseDecoder {
 
     fn drain_complete_events(&mut self) -> Vec<SseEvent> {
         let mut events = Vec::new();
-        loop {
-            let Some(pos) = self.buffer.find("\n\n") else {
-                break;
-            };
+        while let Some(pos) = self.buffer.find("\n\n") {
             let block: String = self.buffer.drain(..pos + 2).collect();
             let block = block.trim();
             if block.is_empty() {
