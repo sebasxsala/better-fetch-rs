@@ -2,8 +2,8 @@
 version = 2
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-unmaintained = "warn"
-ignore = []
+# atty is unmaintained but only pulled by criterion (dev-dependency).
+ignore = ["RUSTSEC-2024-0375"]
 
 [licenses]
 version = 2
