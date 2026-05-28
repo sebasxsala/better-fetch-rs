@@ -78,6 +78,7 @@ For compile-time route definitions (method, path, params, query, response), see 
 - **`EndpointRequestBuilder`** — no `DerefMut`; use typed `.query(MyQuery)?` instead of stringly `.query("key", "value")` on `Ready`.
 - **`http_service` / `http_service_boxed`** — Tower layers apply to buffered `send()` only; use `transport_stack` for `send_stream()`.
 - **`schema-validate` strict** — query/params wire values are coerced to JSON numbers/bools when possible before JSON Schema checks.
+- **Manual `impl Endpoint`** — add `type Body = (); type Headers = ();` when missing.
 
 See [CHANGELOG.md](CHANGELOG.md#040---2026-05-27) for the full list.
 
@@ -89,7 +90,7 @@ See [CHANGELOG.md](CHANGELOG.md#040---2026-05-27) for the full list.
 | Shared client config (base URL, auth, default headers, retry policy) | You already have a custom stack and only need transport |
 | Testing via [`HttpBackend`](https://docs.rs/better-fetch/latest/better_fetch/trait.HttpBackend.html) / [`RecordingBackend`](https://docs.rs/better-fetch/latest/better_fetch/struct.RecordingBackend.html) | Full control of every reqwest option with no abstraction |
 
-better-fetch **is** reqwest under the hood for the default backend; you can pass a custom [`reqwest::Client`](https://docs.rs/reqwest) with [`Client::from_reqwest`](https://docs.rs/better-fetch/latest/better_fetch/struct.Client.html#method.from_reqwest).
+better-fetch **is** reqwest under the hood for the default backend; you can pass a custom [`reqwest::Client`](https://docs.rs/reqwest) with [`Client::with_http_client`](https://docs.rs/better-fetch/latest/better_fetch/struct.Client.html#method.with_http_client) (or [`ClientBuilder::reqwest_client`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.reqwest_client) on the builder).
 
 **Concurrency:** [`ClientBuilder::max_in_flight`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_in_flight) limits concurrent requests (including retries) inside the client. With `feature = "tower"`, [`ConcurrencyLimitLayer`](https://docs.rs/better-fetch/latest/better_fetch/tower/stack/struct.ConcurrencyLimitLayer.html) caps the transport separately — avoid stacking both at the same numeric limit unless intentional. See [`examples/tower_vs_streaming.rs`](examples/tower_vs_streaming.rs).
 
@@ -216,9 +217,12 @@ when you want them on the wire.
 | Path (`E::Params`) | Yes, when not `()` — type-state [`NeedsParams`](https://docs.rs/better-fetch/latest/better_fetch/struct.NeedsParams.html) |
 | Body (`E::Body` on POST, etc.) | Yes, when the `macros` endpoint marks a required body — [`NeedsBody`](https://docs.rs/better-fetch/latest/better_fetch/struct.NeedsBody.html) |
 | Query (`E::Query`) | **No** — typed, but [`.query()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.query) is optional; omit it to send no query string |
+| Headers (`E::Headers`) | **No** — typed, optional via [`.with_headers()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.with_headers) |
 | Response (`E::Response`) | Typed deserialization via `.send_json()` |
 
 `E::Query: Default` does **not** mean the library applies a default query on send — you must call `.query(...)?` to serialize `E::Query`. For required query params at runtime, use `schema-validate` strict or tests.
+
+<!-- Keep in sync with tests/readme_examples.rs -->
 
 ```rust
 use better_fetch::{Client, Endpoint, Result, define_params};
@@ -234,6 +238,8 @@ impl Endpoint for GetTodo {
     type Response = Todo;
     type Params = GetTodoParams;
     type Query = ();
+    type Body = ();
+    type Headers = ();
 }
 
 #[derive(Deserialize)]
@@ -299,13 +305,20 @@ Note: **automatic retry is not supported** with `.multipart()` (the body cannot 
 `ClientBuilder::build()` requires `.base_url(...)` — otherwise `Error::MissingBaseUrl`.
 
 ```rust
-use better_fetch::{ClientBuilder, RetryPolicy};
+use better_fetch::{Client, ClientBuilder, Error, RetryPolicy, Result};
 use std::time::Duration;
 
 let client = ClientBuilder::new()
     .base_url("https://api.example.com")?
     .retry(RetryPolicy::exponential(3, Duration::from_secs(1), Duration::from_secs(30)))
     .build()?;
+
+// Or pass a custom reqwest client:
+let reqwest = reqwest::Client::builder()
+    .pool_max_idle_per_host(0)
+    .build()
+    .map_err(|e| Error::Config(e.to_string()))?;
+let client = Client::with_http_client(reqwest, "https://api.example.com")?;
 ```
 
 ### Concurrency limits
