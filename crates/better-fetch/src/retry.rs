@@ -7,6 +7,8 @@
 //! and headers without reading the body. When a custom [`ShouldRetryFn`](crate::ShouldRetryFn) is
 //! set, the client peeks up to [`ClientBuilder::retry_body_peek_bytes`](crate::ClientBuilder::retry_body_peek_bytes)
 //! (default 64 KiB, capped by [`ClientBuilder::max_response_bytes`](crate::ClientBuilder::max_response_bytes) when set).
+//! The peek is replayed on the stream returned to the caller; only a confirmed retry or
+//! [`RequestBuilder::throw_on_error`](crate::RequestBuilder::throw_on_error)(`true`) drains the body.
 
 use std::sync::Arc;
 use std::time::Duration;

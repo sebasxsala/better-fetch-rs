@@ -252,6 +252,60 @@ pub(crate) async fn drain_body_for_retry(body: BodyStream, limit: u64) -> Result
     accumulate_stream(body, Some(limit)).await
 }
 
+/// Reads at most `limit` bytes from the front of `body`, leaving the remainder in the returned stream.
+pub(crate) async fn peek_stream_prefix(
+    mut body: BodyStream,
+    limit: u64,
+) -> Result<(Bytes, BodyStream)> {
+    use futures_util::StreamExt;
+
+    if limit == 0 {
+        return Ok((Bytes::new(), body));
+    }
+
+    let mut buf = BytesMut::new();
+    let mut rest_head: Option<Bytes> = None;
+
+    while (buf.len() as u64) < limit {
+        let Some(chunk) = body.next().await else {
+            break;
+        };
+        let chunk = chunk?;
+        let remaining = limit - buf.len() as u64;
+        if chunk.len() as u64 <= remaining {
+            buf.extend_from_slice(&chunk);
+        } else {
+            let split_at = usize::try_from(remaining).unwrap_or(0);
+            buf.extend_from_slice(&chunk[..split_at]);
+            rest_head = Some(chunk.slice(split_at..));
+            break;
+        }
+    }
+
+    let prefix = buf.freeze();
+    let rest = match rest_head {
+        Some(head) => body_stream_prepend(head, body),
+        None => body,
+    };
+    Ok((prefix, rest))
+}
+
+/// Discards all bytes remaining in `body`.
+pub(crate) async fn drain_remaining(body: BodyStream) -> Result<()> {
+    let _ = accumulate_stream(body, None).await?;
+    Ok(())
+}
+
+/// Prepends `prefix` to `rest` as a single streaming body.
+pub(crate) fn body_stream_prepend(prefix: Bytes, rest: BodyStream) -> BodyStream {
+    use futures_util::StreamExt;
+
+    if prefix.is_empty() {
+        return rest;
+    }
+    Box::pin(futures_util::stream::once(async move { Ok(prefix) }).chain(rest))
+}
+
 /// Accumulates a body stream into a single buffer, optionally enforcing `limit`.
 pub(crate) async fn accumulate_stream(mut body: BodyStream, limit: Option<u64>) -> Result<Bytes> {
     use futures_util::StreamExt;
@@ -411,6 +465,44 @@ mod tests {
 
         let item = read.await.unwrap();
         assert!(matches!(item, Some(Err(e)) if e.is_cancelled()));
+    }
+
+    #[tokio::test]
+    async fn peek_stream_prefix_splits_chunk_at_limit() {
+        let body = stream_from_chunks(vec![
+            Ok(Bytes::from_static(b"hello")),
+            Ok(Bytes::from_static(b"world")),
+        ]);
+        let (prefix, mut rest) = peek_stream_prefix(body, 5).await.unwrap();
+        assert_eq!(prefix.as_ref(), b"hello");
+        assert_eq!(rest.next().await.unwrap().unwrap().as_ref(), b"world");
+        assert!(rest.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn peek_stream_prefix_preserves_tail_beyond_limit() {
+        let payload = vec![0u8; 200 * 1024];
+        let body = body_stream_from_bytes(Bytes::from(payload.clone()));
+        let (prefix, rest) = peek_stream_prefix(body, 64 * 1024).await.unwrap();
+        assert_eq!(prefix.len(), 64 * 1024);
+        let tail = accumulate_stream(rest, None).await.unwrap();
+        assert_eq!(tail.len(), 136 * 1024);
+        assert_eq!(&tail[..], &payload[64 * 1024..]);
+    }
+
+    #[tokio::test]
+    async fn body_stream_prepend_replays_full_body() {
+        let body = stream_from_chunks(vec![
+            Ok(Bytes::from_static(b"ab")),
+            Ok(Bytes::from_static(b"cd")),
+        ]);
+        let (prefix, rest) = peek_stream_prefix(body, 1).await.unwrap();
+        let mut combined = body_stream_prepend(prefix, rest);
+        let mut out = BytesMut::new();
+        while let Some(chunk) = combined.next().await {
+            out.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(out.as_ref(), b"abcd");
     }
 
     #[tokio::test]
