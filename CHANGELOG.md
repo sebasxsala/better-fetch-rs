@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-28
+
+### Added
+
+- **Battle testing** — expanded CI (feature matrix, MSRV, docs, `cargo-deny`, `cargo-semver-checks`, weekly fuzz), `tests/url_edge_tests.rs`, proptest coverage for URL/query/path, criterion benches, and fuzz targets under `fuzz/`.
+
+### Changed
+
+- **MSRV** — raised to **1.88** (matches current dependency floor, e.g. `cookie_store`).
+- **CI** — dropped Miri job (low signal with workspace `unsafe_code = "forbid"`).
+
 ### Fixed
 
 - **`max_response_bytes` on buffered responses** — `ClientBuilder::max_response_bytes` and per-request `.max_response_bytes()` now apply to `send()` and `send_json()`, not only `send_stream()` / `collect()`. Bodies are read via the streaming transport when a cap is set; oversized `Content-Length` headers fail fast with `Error::BodyTooLarge`.
+- **Streaming non-2xx bodies** — `send_stream()` preserves the full response body when status is not 2xx and `throw()` is not set.
 
 ## [0.4.0] - 2026-05-27
 
