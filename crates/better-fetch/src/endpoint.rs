@@ -479,7 +479,7 @@ impl<'a, E: Endpoint> EndpointRequestBuilder<'a, E, Ready> {
         self.inner.send_stream().await
     }
 
-    /// Caps streaming response size ([`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes)).
+    /// Caps response body size ([`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes)).
     pub fn max_response_bytes(self, limit: u64) -> Self {
         Self {
             inner: self.inner.max_response_bytes(limit),

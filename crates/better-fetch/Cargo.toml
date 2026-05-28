@@ -199,6 +199,11 @@ path = "../../tests/multipart_tests.rs"
 required-features = ["multipart"]
 
 [[test]]
+name = "buffered_limit_tests"
+path = "../../tests/buffered_limit_tests.rs"
+required-features = ["json"]
+
+[[test]]
 name = "streaming_tests"
 path = "../../tests/streaming_tests.rs"
 

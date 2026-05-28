@@ -65,7 +65,7 @@ pub struct ClientConfig {
     #[cfg(feature = "json")]
     /// Client-wide custom JSON parser (feature `json`).
     pub json_parser: Option<JsonParserFn>,
-    /// Default maximum response body size for [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream).
+    /// Default maximum response body size for buffered and streaming responses.
     pub max_response_bytes: Option<u64>,
     /// Maximum bytes read from a streaming body when evaluating a custom retry predicate.
     pub retry_body_peek_bytes: u64,

@@ -336,10 +336,12 @@ impl<'a> RequestBuilder<'a> {
         self.client.execute(self).await
     }
 
-    /// Maximum response body size in bytes for this streaming request.
+    /// Maximum response body size in bytes for this request.
     ///
-    /// Applies to [`send_stream`](Self::send_stream) only. When a chunk would exceed the limit,
-    /// the stream yields [`Error::BodyTooLarge`](crate::Error::BodyTooLarge).
+    /// Applies to [`send`](Self::send), [`send_json`](Self::send_json), [`send_stream`](Self::send_stream),
+    /// and [`StreamingResponse::collect`](crate::StreamingResponse::collect). When the body would exceed
+    /// the limit, returns [`Error::BodyTooLarge`](crate::Error::BodyTooLarge). On the streaming path,
+    /// the limit is also enforced incrementally on each chunk.
     pub fn max_response_bytes(mut self, limit: u64) -> Self {
         self.max_response_bytes = Some(limit);
         self

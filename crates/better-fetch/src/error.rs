@@ -107,7 +107,8 @@ pub enum Error {
     Cancelled,
 
     /// Response body exceeded [`ClientBuilder::max_response_bytes`](crate::ClientBuilder::max_response_bytes)
-    /// or a per-request [`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes) limit.
+    /// or a per-request [`RequestBuilder::max_response_bytes`](crate::RequestBuilder::max_response_bytes) limit
+    /// on buffered (`send` / `send_json`) or streaming responses.
     #[error("response body exceeded limit of {limit} bytes")]
     BodyTooLarge {
         /// Configured maximum response size in bytes.

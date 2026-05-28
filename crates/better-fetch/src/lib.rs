@@ -19,6 +19,8 @@
 //! ## Buffered vs streaming
 //!
 //! - **`send` / `send_json`** — full body in memory; hooks and retry predicates can read the body.
+//!   When [`ClientBuilder::max_response_bytes`](ClientBuilder::max_response_bytes) is set, the body is read
+//!   via the streaming transport up to that limit (same [`Error::BodyTooLarge`](Error::BodyTooLarge) as streams).
 //! - **`send_stream`** — `bytes_stream()` from reqwest; use [`StreamingResponse::collect`] to buffer when needed.
 //!   See the [`streaming`] module for limits (hooks, custom retry predicates, Tower backend).
 //!

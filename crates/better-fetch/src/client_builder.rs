@@ -168,7 +168,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Maximum response body size (in bytes) for [`RequestBuilder::send_stream`](crate::RequestBuilder::send_stream)
+    /// Maximum response body size (in bytes) for [`RequestBuilder::send`](crate::RequestBuilder::send),
+    /// [`send_json`](crate::RequestBuilder::send_json), and [`send_stream`](crate::RequestBuilder::send_stream)
     /// when the request does not set its own limit.
     pub fn max_response_bytes(mut self, limit: u64) -> Self {
         self.max_response_bytes = Some(limit);

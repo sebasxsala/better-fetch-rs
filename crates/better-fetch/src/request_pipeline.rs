@@ -8,7 +8,7 @@ use http::{HeaderMap, Method, StatusCode};
 use tokio::sync::OwnedSemaphorePermit;
 use url::Url;
 
-use crate::backend::{HttpBackend, HttpBody, HttpRequest};
+use crate::backend::{HttpBackend, HttpBody, HttpRequest, HttpResponse};
 use crate::cancel::{execute_or_cancel, CancellationToken};
 use crate::client::Client;
 use crate::error::Error;
@@ -21,8 +21,8 @@ use crate::request::RequestBuilder;
 use crate::response::Response;
 use crate::retry::{sleep_or_cancel, RetryPolicy};
 use crate::streaming::{
-    body_stream_from_bytes, drain_body_for_retry, wrap_cancellation, wrap_max_bytes, BodyStream,
-    StreamingResponse,
+    accumulate_stream, body_stream_from_bytes, drain_body_for_retry, wrap_cancellation,
+    wrap_max_bytes, BodyStream, StreamingResponse,
 };
 use crate::url_build::build_url;
 use crate::Result;
@@ -535,6 +535,47 @@ async fn evaluate_stream_retry(
     }
 }
 
+fn response_body_exceeds_content_length(headers: &HeaderMap, limit: u64) -> bool {
+    let Some(value) = headers.get(http::header::CONTENT_LENGTH) else {
+        return false;
+    };
+    let Ok(s) = value.to_str() else {
+        return false;
+    };
+    let Ok(len) = s.parse::<u64>() else {
+        return false;
+    };
+    len > limit
+}
+
+/// Buffered transport: unbounded `execute` when no cap, otherwise stream + accumulate with limit.
+async fn fetch_buffered_response(
+    backend: &Arc<dyn HttpBackend>,
+    http_req: HttpRequest,
+    limit: Option<u64>,
+    cancel: Option<&CancellationToken>,
+) -> Result<HttpResponse> {
+    match limit {
+        None => execute_or_cancel(cancel, backend.execute(http_req)).await,
+        Some(limit) => {
+            let streamed = execute_or_cancel(cancel, backend.execute_stream(http_req)).await?;
+            if response_body_exceeds_content_length(&streamed.headers, limit) {
+                return Err(Error::BodyTooLarge { limit });
+            }
+            let mut body = streamed.body;
+            if let Some(token) = cancel.cloned() {
+                body = wrap_cancellation(body, token);
+            }
+            let bytes = accumulate_stream(body, Some(limit)).await?;
+            Ok(HttpResponse {
+                status: streamed.status,
+                headers: streamed.headers,
+                body: bytes,
+            })
+        }
+    }
+}
+
 async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<LoopOutput> {
     let mut attempt = 0u32;
     let max_attempts = prep
@@ -555,7 +596,13 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
 
         match mode {
             LoopMode::Buffered => {
-                let result = execute_or_cancel(cancel_ref, prep.backend.execute(http_req)).await;
+                let result = fetch_buffered_response(
+                    &prep.backend,
+                    http_req,
+                    prep.max_response_bytes,
+                    cancel_ref,
+                )
+                .await;
                 match result {
                     Ok(http_res) => {
                         let response = retry_stub_response(

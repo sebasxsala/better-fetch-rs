@@ -315,7 +315,7 @@ Wire a custom transport with `ClientBuilder::http_service`, `http_service_boxed`
 | [`send_stream()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.send_stream) → [`StreamingResponse`](https://docs.rs/better-fetch/latest/better_fetch/struct.StreamingResponse.html) | Large downloads, chunked bodies, incremental processing |
 | [`collect()`](https://docs.rs/better-fetch/latest/better_fetch/struct.StreamingResponse.html#method.collect) on a stream | Opt back into the buffered `Response` API after streaming |
 
-`send()` always buffers via `response.bytes().await` in the reqwest backend. `send_stream()` uses `bytes_stream()` and does not buffer until you call `collect()`.
+`send()` buffers the full body in memory by default (reqwest `bytes().await` when no size cap is set). With [`max_response_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_response_bytes), `send()` and `send_json()` read the body through the streaming transport and stop at the limit. `send_stream()` uses `bytes_stream()` and does not buffer until you call `collect()`.
 
 **Streaming hooks:** [`on_response_stream`](https://docs.rs/better-fetch/latest/better_fetch/struct.Hooks.html#method.on_response_stream) and [`on_success_stream`](https://docs.rs/better-fetch/latest/better_fetch/struct.Hooks.html#method.on_success_stream) run on the streaming path (status + headers only). Buffered [`on_response`](https://docs.rs/better-fetch/latest/better_fetch/struct.Hooks.html#method.on_response) / [`on_success`](https://docs.rs/better-fetch/latest/better_fetch/struct.Hooks.html#method.on_success) are not invoked for `send_stream`.
 
@@ -327,9 +327,9 @@ Wire a custom transport with `ClientBuilder::http_service`, `http_service_boxed`
 
 - [`send_json`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.send_json) is not available on streams — use `collect()` then `into_json()`, or deserialize from chunks yourself.
 - Cancellation is cooperative: the stream wakes on cancel when the inner read is pending, not inside a blocking OS read.
-- `collect()` without `max_response_bytes` can use unbounded memory; set a cap for untrusted payloads.
+- Without `max_response_bytes`, `send()`, `send_json()`, and `collect()` can use unbounded memory; set a cap for untrusted payloads.
 
-Optional caps: [`ClientBuilder::max_response_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_response_bytes) and per-request [`.max_response_bytes()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.max_response_bytes) yield [`Error::BodyTooLarge`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.BodyTooLarge) when exceeded.
+Optional caps: [`ClientBuilder::max_response_bytes`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_response_bytes) and per-request [`.max_response_bytes()`](https://docs.rs/better-fetch/latest/better_fetch/struct.RequestBuilder.html#method.max_response_bytes) apply to buffered and streaming responses and yield [`Error::BodyTooLarge`](https://docs.rs/better-fetch/latest/better_fetch/enum.Error.html#variant.BodyTooLarge) when exceeded.
 
 See [`examples/streaming.rs`](examples/streaming.rs), [`examples/buffered_vs_streaming.rs`](examples/buffered_vs_streaming.rs), [`examples/throw_on_error.rs`](examples/throw_on_error.rs), and [`examples/cancel.rs`](examples/cancel.rs).
 

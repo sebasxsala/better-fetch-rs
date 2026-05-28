@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`max_response_bytes` on buffered responses** — `ClientBuilder::max_response_bytes` and per-request `.max_response_bytes()` now apply to `send()` and `send_json()`, not only `send_stream()` / `collect()`. Bodies are read via the streaming transport when a cap is set; oversized `Content-Length` headers fail fast with `Error::BodyTooLarge`.
+
 ## [0.4.0] - 2026-05-27
 
 ### Added
