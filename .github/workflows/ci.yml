@@ -92,7 +92,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build docs (docs.rs cfg)
-        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p better-fetch --all-features --no-deps
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc -p better-fetch --all-features --no-deps
 
   deny:
     name: cargo-deny
@@ -123,4 +123,4 @@ jobs:
           cargo semver-checks check-release \
             -p better-fetch \
             -p better-fetch-macros \
-            --baseline-version 0.4.0
+            --baseline-version 0.5.0
