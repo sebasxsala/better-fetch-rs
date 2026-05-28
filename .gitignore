@@ -5,5 +5,9 @@ skills-lock.json
 .idea
 .vscode
 
+# cargo-fuzz (`fuzz/` is excluded from the workspace; builds its own target dir)
+/fuzz/target/
+/fuzz/artifacts/
+
 # Local upstream snapshot for development (see reference/upstream-better-fetch/NOTICE.md)
 /reference/upstream-src/

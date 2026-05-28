@@ -437,6 +437,63 @@ async fn custom_retry_no_retry_restores_body_on_stream() -> Result<()> {
 }
 
 #[tokio::test]
+async fn retry_body_peek_bytes_small_peek_skips_retry() -> Result<()> {
+    assert_retry_peek_attempts(128, 1).await
+}
+
+#[tokio::test]
+async fn retry_body_peek_bytes_large_peek_retries() -> Result<()> {
+    assert_retry_peek_attempts(1024, 2).await
+}
+
+async fn assert_retry_peek_attempts(peek_bytes: u64, expected_attempts: u32) -> Result<()> {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicU32::new(0));
+    let attempts_cb = attempts.clone();
+    let large_body = "x".repeat(512);
+
+    Mock::given(method("GET"))
+        .and(path("/peek-cap"))
+        .respond_with(move |_: &wiremock::Request| {
+            let n = attempts_cb.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                ResponseTemplate::new(503).set_body_string(large_body.clone())
+            } else {
+                ResponseTemplate::new(200).set_body_string("ok")
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let policy = RetryPolicy::count(1).with_should_retry(Arc::new(|res| res.bytes().len() >= 512));
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .retry(policy)
+        .retry_body_peek_bytes(peek_bytes)
+        .build()?;
+
+    if expected_attempts > 1 {
+        let body = client
+            .get("/peek-cap")
+            .send_stream()
+            .await?
+            .collect()
+            .await?
+            .into_bytes_checked()?;
+        assert_eq!(body, Bytes::from_static(b"ok"));
+    } else {
+        assert_eq!(
+            client.get("/peek-cap").send_stream().await?.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    assert_eq!(attempts.load(Ordering::SeqCst), expected_attempts);
+    Ok(())
+}
+
+#[tokio::test]
 async fn custom_backend_without_streaming_returns_error() -> Result<()> {
     let client = ClientBuilder::new()
         .base_url("http://localhost")?

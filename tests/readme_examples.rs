@@ -20,6 +20,7 @@ mod typed_endpoint_manual {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     struct Todo {
         id: u64,
         title: String,

@@ -72,3 +72,9 @@ Most tests in this repository use [wiremock](https://docs.rs/wiremock) with `Cli
 ## Compile-fail tests
 
 Typed endpoint invariants are checked with `trybuild` under `tests/endpoint_compile_fail/` and `tests/endpoint_macros_compile_fail/`.
+
+## Property tests, fuzz, and benchmarks
+
+- **Property tests** — `proptest` in `crates/better-fetch/src/url_build.rs` and integration edge cases in `tests/url_edge_tests.rs`.
+- **Fuzz** — `cargo +nightly fuzz run build_url` / `parse_query` from the repo-root `fuzz/` crate (weekly CI smoke).
+- **Benchmarks** — `cargo bench -p better-fetch --bench url_build` (criterion; not run on every PR).

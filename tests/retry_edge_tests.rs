@@ -36,8 +36,7 @@ async fn respects_retry_after_header_over_policy_delay() -> Result<()> {
     let elapsed = start.elapsed();
     assert!(
         elapsed < Duration::from_secs(5),
-        "expected Retry-After ~1s, got {:?}",
-        elapsed
+        "expected Retry-After ~1s, got {elapsed:?}",
     );
     Ok(())
 }

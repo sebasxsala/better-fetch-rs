@@ -1,0 +1,29 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: cargo-fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: build_url (10k runs)
+        run: cargo fuzz run build_url -- -runs=10000 -max_total_time=120
+
+      - name: parse_query (10k runs)
+        run: cargo fuzz run parse_query -- -runs=10000 -max_total_time=120

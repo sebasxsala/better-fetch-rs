@@ -195,6 +195,11 @@ pub use retry::{default_should_retry, parse_retry_after, RetryPolicy, ShouldRetr
 pub use schema::{EndpointSchema, SchemaRegistry};
 pub use sse::{parse_sse_events, SseDecoder, SseEvent, SseEventStream};
 pub use streaming::{BodyStream, StreamingResponse};
+#[cfg(feature = "json")]
+#[doc(hidden)]
+pub use url_build::serialize_to_query_map;
+#[doc(hidden)]
+pub use url_build::{build_url, fuzz_build_url, fuzz_parse_embedded_query};
 pub use url_build::{path_param_names, QueryValue};
 
 #[cfg(feature = "openapi")]

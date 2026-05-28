@@ -28,6 +28,23 @@ pub fn path_param_names(path: &str) -> Vec<String> {
     crate::path_params::path_param_names(path)
 }
 
+/// Fuzzing entry point: builds a URL from `path` against a fixed base (no params/query).
+#[doc(hidden)]
+pub fn fuzz_build_url(path: &str) -> Result<BuiltUrl> {
+    build_url(
+        &Url::parse("https://api.example.com").map_err(Error::InvalidBaseUrl)?,
+        path,
+        &HashMap::new(),
+        &IndexMap::new(),
+    )
+}
+
+/// Fuzzing entry point: merges an embedded `?query` suffix from `path` with an empty builder query.
+#[doc(hidden)]
+pub fn fuzz_parse_embedded_query(path: &str) -> Result<BuiltUrl> {
+    fuzz_build_url(path)
+}
+
 /// Build a request URL from base URL, path template, params, and query.
 ///
 /// Query keys are serialized in insertion order ([`IndexMap`]). A `?foo=bar` suffix on `path`
@@ -355,6 +372,50 @@ mod tests {
         let built = build_url(&base(), "", &HashMap::new(), &IndexMap::new()).unwrap();
         assert_eq!(built.url.as_str(), "https://api.example.com/");
     }
+
+    #[cfg(feature = "json")]
+    mod serialize_tests {
+        use super::*;
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct SearchQuery {
+            q: String,
+            page: u32,
+            active: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tag: Option<String>,
+        }
+
+        #[test]
+        fn serialize_to_query_map_skips_null_and_serializes_fields() {
+            let value = SearchQuery {
+                q: "rust".into(),
+                page: 2,
+                active: true,
+                tag: None,
+            };
+            let map = serialize_to_query_map(&value).unwrap();
+            assert_eq!(map.len(), 3);
+            assert!(matches!(map.get("q"), Some(QueryValue::Scalar(s)) if s == "rust"));
+            assert!(matches!(map.get("page"), Some(QueryValue::Scalar(s)) if s == "2"));
+            assert!(matches!(map.get("active"), Some(QueryValue::Scalar(s)) if s == "true"));
+            assert!(!map.contains_key("tag"));
+        }
+
+        #[test]
+        fn serialize_to_query_map_array_field() {
+            #[derive(Serialize)]
+            struct Tags {
+                tags: Vec<String>,
+            }
+            let value = Tags {
+                tags: vec!["a".into(), "b".into()],
+            };
+            let map = serialize_to_query_map(&value).unwrap();
+            assert!(matches!(map.get("tags"), Some(QueryValue::Array(v)) if v == &["a", "b"]));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -362,20 +423,89 @@ mod proptests {
     use super::*;
     use proptest::prelude::*;
 
+    fn base() -> Url {
+        Url::parse("https://api.example.com").unwrap()
+    }
+
     proptest! {
         #[test]
         fn substitute_preserves_literal_segments(path in r"([a-z]+/)*[a-z]+") {
             let mut params = HashMap::new();
             params.insert("id".into(), "42".into());
             let template = format!("/{path}/:id");
-            let built = build_url(
-                &Url::parse("https://api.example.com").unwrap(),
-                &template,
-                &params,
-                &IndexMap::new(),
-            )
-            .unwrap();
+            let built = build_url(&base(), &template, &params, &IndexMap::new()).unwrap();
             prop_assert!(built.url.as_str().ends_with("/42"));
+        }
+
+        #[test]
+        fn scalar_query_round_trips_key_value(
+            key in r"[a-zA-Z][a-zA-Z0-9_-]{0,15}",
+            value in r"[a-zA-Z0-9._-]{0,32}",
+        ) {
+            let mut query = IndexMap::new();
+            query.insert(key.clone(), QueryValue::Scalar(value.clone()));
+            let built = build_url(&base(), "/search", &HashMap::new(), &query).unwrap();
+            let q = built.url.query().unwrap();
+            let needle = format!("{key}={value}");
+            prop_assert!(q.contains(&needle));
+        }
+
+        #[test]
+        fn builder_query_overrides_embedded_key(
+            key in r"[a-z][a-z0-9]{0,8}",
+            embedded in r"[a-z0-9]{1,12}",
+            override_val in r"[a-z0-9]{1,12}",
+        ) {
+            let _ = embedded;
+            let mut query = IndexMap::new();
+            query.insert(key.clone(), QueryValue::Scalar(override_val.clone()));
+            let path = format!("/search?{key}={embedded}");
+            let built = build_url(&base(), &path, &HashMap::new(), &query).unwrap();
+            let q = built.url.query().unwrap();
+            let parsed: std::collections::HashMap<String, String> =
+                url::form_urlencoded::parse(q.as_bytes())
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect();
+            prop_assert_eq!(parsed.get(&key).map(String::as_str), Some(override_val.as_str()));
+        }
+
+        #[test]
+        fn missing_path_param_always_errors(
+            name in r"[a-z][a-z0-9]{0,12}",
+        ) {
+            let template = format!("/items/:{name}");
+            let err = build_url(&base(), &template, &HashMap::new(), &IndexMap::new()).unwrap_err();
+            prop_assert!(matches!(err, Error::MissingPathParam(_)));
+        }
+
+        #[test]
+        fn join_path_preserves_base_for_empty_path(
+            trailing in prop::bool::ANY,
+        ) {
+            let base_str = if trailing {
+                "https://api.example.com/"
+            } else {
+                "https://api.example.com"
+            };
+            let base_url = Url::parse(base_str).unwrap();
+            let built = build_url(&base_url, "", &HashMap::new(), &IndexMap::new()).unwrap();
+            prop_assert_eq!(built.url.as_str(), "https://api.example.com/");
+        }
+
+        #[test]
+        fn array_query_repeats_key(
+            key in r"[a-z][a-z0-9]{0,6}",
+            a in r"[a-z0-9]{1,8}",
+            b in r"[a-z0-9]{1,8}",
+        ) {
+            let mut query = IndexMap::new();
+            query.insert(key.clone(), QueryValue::Array(vec![a.clone(), b.clone()]));
+            let built = build_url(&base(), "/search", &HashMap::new(), &query).unwrap();
+            let q = built.url.query().unwrap();
+            let a_needle = format!("{key}={a}");
+            let b_needle = format!("{key}={b}");
+            prop_assert!(q.contains(&a_needle));
+            prop_assert!(q.contains(&b_needle));
         }
     }
 }

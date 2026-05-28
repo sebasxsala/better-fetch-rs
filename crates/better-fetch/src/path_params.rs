@@ -11,3 +11,29 @@ pub fn path_param_names(path: &str) -> Vec<String> {
         .filter_map(|segment| segment.strip_prefix(':').map(str::to_string))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignores_embedded_query_suffix() {
+        assert_eq!(
+            path_param_names("/users/:id?tab=profile"),
+            vec!["id".to_string()]
+        );
+    }
+
+    #[test]
+    fn multiple_params_in_order() {
+        assert_eq!(
+            path_param_names("/orgs/:org/repos/:repo"),
+            vec!["org".to_string(), "repo".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_params_returns_empty() {
+        assert!(path_param_names("/health").is_empty());
+    }
+}

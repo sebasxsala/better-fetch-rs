@@ -1,4 +1,4 @@
-error[E0599]: no method named `param` found for struct `EndpointRequestBuilder<'a, E, S>` in the current scope
+error[E0599]: no method named `param` found for struct `EndpointRequestBuilder` in the current scope
  --> $WORKSPACE/tests/endpoint_compile_fail/stringly_param.rs
   |
   |     let _ = client.call::<GetTodo>().param("id", 1);

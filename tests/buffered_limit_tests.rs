@@ -36,16 +36,13 @@ async fn send_max_response_bytes_allows_body_under_limit() -> Result<()> {
         .await;
 
     let client = Client::new(server.uri())?;
-    let response = client
-        .get("/small")
-        .max_response_bytes(1024)
-        .send()
-        .await?;
+    let response = client.get("/small").max_response_bytes(1024).send().await?;
     assert_eq!(response.into_bytes_checked()?, Bytes::from_static(b"ok"));
     Ok(())
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct N {
     n: u32,
 }

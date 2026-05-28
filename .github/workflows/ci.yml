@@ -10,7 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  lint:
+    name: fmt & clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,8 +34,93 @@ jobs:
           cargo check -p better-fetch --no-default-features --features json,native-tls
           cargo check -p better-fetch --no-default-features --features multipart,rustls-tls
 
-      - name: Tests
-        run: cargo test --all-features
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            cmd: cargo test -p better-fetch
+          - name: no-default-features
+            cmd: cargo test -p better-fetch --no-default-features --lib
+          - name: rustls-only
+            cmd: cargo test -p better-fetch --no-default-features --features rustls-tls --lib
+          - name: json-rustls
+            cmd: cargo test -p better-fetch --no-default-features --features json,rustls-tls
+          - name: native-tls
+            cmd: cargo test -p better-fetch --no-default-features --features json,native-tls
+          - name: all-features
+            cmd: cargo test -p better-fetch --all-features
+          - name: workspace-no-default-features
+            cmd: cargo test --workspace --no-default-features -p better-fetch-macros -p typed-fetch -p api-fetch
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Tests (schema-validate feature)
-        run: cargo test -p better-fetch --features schema-validate,json,rustls-tls
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: ${{ matrix.cmd }}
+
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests (all features)
+        run: cargo test -p better-fetch --all-features
+
+  doc:
+    name: docs
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build docs (docs.rs cfg)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p better-fetch --all-features --no-deps
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  semver:
+    name: cargo-semver-checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked
+
+      - name: Check semver (vs published 0.4.0)
+        run: |
+          cargo semver-checks check-release \
+            -p better-fetch \
+            -p better-fetch-macros \
+            --baseline-version 0.4.0

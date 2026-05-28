@@ -520,4 +520,35 @@ mod tests {
         let err = wrapped.next().await.unwrap().unwrap_err();
         assert!(err.is_cancelled());
     }
+
+    #[tokio::test]
+    async fn accumulate_stream_single_byte_chunks_exact_limit() {
+        let chunks: Vec<Result<Bytes>> = (0..5).map(|_| Ok(Bytes::from_static(b"x"))).collect();
+        let body = stream_from_chunks(chunks);
+        let out = accumulate_stream(body, Some(5)).await.unwrap();
+        assert_eq!(out.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn accumulate_stream_single_byte_chunks_over_limit() {
+        let chunks: Vec<Result<Bytes>> = (0..6).map(|_| Ok(Bytes::from_static(b"x"))).collect();
+        let body = stream_from_chunks(chunks);
+        let err = accumulate_stream(body, Some(5)).await.unwrap_err();
+        assert!(err.is_body_too_large());
+        assert_eq!(err.body_too_large_limit(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn accumulate_stream_one_chunk_exceeds_limit() {
+        let body = stream_from_chunks(vec![Ok(Bytes::from_static(b"123456"))]);
+        let err = accumulate_stream(body, Some(5)).await.unwrap_err();
+        assert_eq!(err.body_too_large_limit(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn accumulate_stream_limit_minus_one_succeeds() {
+        let body = stream_from_chunks(vec![Ok(Bytes::from_static(b"1234"))]);
+        let out = accumulate_stream(body, Some(5)).await.unwrap();
+        assert_eq!(out.as_ref(), b"1234");
+    }
 }
