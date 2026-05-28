@@ -289,6 +289,11 @@ name = "endpoint_register_tests"
 path = "../../tests/endpoint_register_tests.rs"
 required-features = ["macros", "schema", "json"]
 
+[[test]]
+name = "readme_examples"
+path = "../../tests/readme_examples.rs"
+required-features = ["json"]
+
 [[example]]
 name = "tower_vs_streaming"
 path = "../../examples/tower_vs_streaming.rs"
