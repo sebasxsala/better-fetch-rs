@@ -21,8 +21,8 @@ use crate::request::RequestBuilder;
 use crate::response::Response;
 use crate::retry::{sleep_or_cancel, RetryPolicy};
 use crate::streaming::{
-    body_stream_from_bytes, drain_body_for_retry, wrap_cancellation, wrap_max_bytes, BodyStream,
-    StreamingResponse,
+    body_stream_prepend, drain_body_for_retry, drain_remaining, peek_stream_prefix,
+    wrap_cancellation, wrap_max_bytes, BodyStream, StreamingResponse,
 };
 use crate::url_build::build_url;
 use crate::Result;
@@ -323,9 +323,19 @@ async fn finish_stream_http_status(
     stream_headers: HeaderMap,
     body: BodyStream,
     request_url: Url,
+    peeked_body: Option<Bytes>,
 ) -> Result<LoopOutput> {
     let peek_limit = stream_peek_limit(prep);
-    let peeked = drain_body_for_retry(body, peek_limit).await?;
+
+    let (peeked, mut body) = match peeked_body {
+        Some(peeked) => (peeked, body),
+        None => {
+            let (peeked, rest) = peek_stream_prefix(body, peek_limit).await?;
+            let body = body_stream_prepend(peeked.clone(), rest);
+            (peeked, body)
+        }
+    };
+
     let err_body = if peeked.is_empty() {
         None
     } else {
@@ -336,7 +346,7 @@ async fn finish_stream_http_status(
         status,
         stream_headers.clone(),
         Some(request_url.clone()),
-        peeked.clone(),
+        peeked,
         #[cfg(feature = "json")]
         prep.json_parser.clone(),
     );
@@ -349,10 +359,10 @@ async fn finish_stream_http_status(
         .await;
 
     if prep.throw_on_error {
+        let _ = drain_body_for_retry(body, peek_limit).await?;
         return Err(http_err);
     }
 
-    let mut body = body_stream_from_bytes(peeked);
     if let Some(limit) = prep.max_response_bytes {
         body = wrap_max_bytes(body, limit);
     }
@@ -480,7 +490,11 @@ enum TransportErrorAction {
 
 enum StreamRetryAction {
     Retry,
-    Continue { body: BodyStream },
+    Continue {
+        body: BodyStream,
+        /// Body prefix already peeked for a custom retry predicate.
+        peeked_body: Option<Bytes>,
+    },
 }
 
 async fn evaluate_stream_retry(
@@ -493,7 +507,10 @@ async fn evaluate_stream_retry(
     request_url: &Url,
 ) -> Result<StreamRetryAction> {
     let Some(policy) = prep.retry_policy.as_ref() else {
-        return Ok(StreamRetryAction::Continue { body });
+        return Ok(StreamRetryAction::Continue {
+            body,
+            peeked_body: None,
+        });
     };
 
     let peek_limit = prep
@@ -502,7 +519,7 @@ async fn evaluate_stream_retry(
         .unwrap_or(prep.retry_body_peek_bytes);
 
     if policy.has_custom_should_retry() {
-        let peeked = drain_body_for_retry(body, peek_limit).await?;
+        let (peeked, rest) = peek_stream_prefix(body, peek_limit).await?;
         let stub = retry_stub_response(
             status,
             headers.clone(),
@@ -512,10 +529,12 @@ async fn evaluate_stream_retry(
             prep.json_parser.clone(),
         );
         if policy.should_retry_response(&stub, false) && attempt < max_attempts {
+            drain_remaining(rest).await?;
             return Ok(StreamRetryAction::Retry);
         }
         return Ok(StreamRetryAction::Continue {
-            body: body_stream_from_bytes(peeked),
+            body: body_stream_prepend(peeked.clone(), rest),
+            peeked_body: Some(peeked),
         });
     }
 
@@ -531,7 +550,10 @@ async fn evaluate_stream_retry(
         let _ = drain_body_for_retry(body, peek_limit).await?;
         Ok(StreamRetryAction::Retry)
     } else {
-        Ok(StreamRetryAction::Continue { body })
+        Ok(StreamRetryAction::Continue {
+            body,
+            peeked_body: None,
+        })
     }
 }
 
@@ -691,7 +713,10 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                                 .await?;
                                 continue;
                             }
-                            StreamRetryAction::Continue { mut body } => {
+                            StreamRetryAction::Continue {
+                                mut body,
+                                peeked_body,
+                            } => {
                                 let meta = prep
                                     .merged_hooks
                                     .run_on_response_stream(StreamingResponseContext {
@@ -710,6 +735,7 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                                         stream_headers,
                                         body,
                                         request_url,
+                                        peeked_body,
                                     )
                                     .await;
                                 }

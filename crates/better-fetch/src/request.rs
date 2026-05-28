@@ -356,7 +356,9 @@ impl<'a> RequestBuilder<'a> {
     /// Uses [`Hooks::on_request`](crate::Hooks::on_request), [`Hooks::on_response_stream`](crate::Hooks::on_response_stream),
     /// and [`Hooks::on_success_stream`](crate::Hooks::on_success_stream) (2xx). Buffered
     /// [`Hooks::on_response`](crate::Hooks::on_response) / [`on_success`](crate::Hooks::on_success) are not called.
-    /// Custom retry predicates may peek up to [`ClientBuilder::retry_body_peek_bytes`](crate::ClientBuilder::retry_body_peek_bytes).
+    /// Custom retry predicates may peek up to [`ClientBuilder::retry_body_peek_bytes`](crate::ClientBuilder::retry_body_peek_bytes)
+    /// without consuming the body returned to the caller. Non-2xx responses keep the full streaming
+    /// body unless [`Self::throw_on_error`](Self::throw_on_error)(`true`) or a retry discards it.
     /// Cancellation wakes pending body reads via the cancellation token (checked on each stream poll).
     ///
     /// # Examples

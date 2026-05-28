@@ -315,6 +315,98 @@ async fn custom_retry_predicate_reads_streaming_body() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn non_2xx_stream_returns_full_body_without_throw() -> Result<()> {
+    let server = MockServer::start().await;
+    let payload = vec![7u8; 200 * 1024];
+    Mock::given(method("GET"))
+        .and(path("/large-404"))
+        .respond_with(ResponseTemplate::new(404).set_body_bytes(payload.clone()))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri())?;
+    let mut response = client.get("/large-404").send_stream().await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let mut collected = BytesMut::new();
+    while let Some(chunk) = response.bytes_stream().next().await {
+        collected.extend_from_slice(&chunk?);
+    }
+    assert_eq!(collected.len(), payload.len());
+    assert_eq!(collected.as_ref(), payload.as_slice());
+    Ok(())
+}
+
+#[tokio::test]
+async fn custom_retry_no_retry_large_stream_body() -> Result<()> {
+    let server = MockServer::start().await;
+    let payload = vec![9u8; 200 * 1024];
+    Mock::given(method("GET"))
+        .and(path("/large-no-retry"))
+        .respond_with(ResponseTemplate::new(400).set_body_bytes(payload.clone()))
+        .mount(&server)
+        .await;
+
+    let policy = RetryPolicy::count(1).with_should_retry(Arc::new(|_| false));
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .retry(policy)
+        .build()?;
+
+    let mut response = client.get("/large-no-retry").send_stream().await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let mut collected = BytesMut::new();
+    while let Some(chunk) = response.bytes_stream().next().await {
+        collected.extend_from_slice(&chunk?);
+    }
+    assert_eq!(collected.as_ref(), payload.as_slice());
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_on_error_peek_stub_caller_gets_full_body() -> Result<()> {
+    use better_fetch::hooks::Hooks;
+
+    let server = MockServer::start().await;
+    let mut payload = vec![0u8; 100 * 1024];
+    payload[..6].copy_from_slice(b"PREFIX");
+    Mock::given(method("GET"))
+        .and(path("/peek-404"))
+        .respond_with(ResponseTemplate::new(404).set_body_bytes(payload.clone()))
+        .mount(&server)
+        .await;
+
+    let stub_len = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stub_prefix = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stub_len_c = stub_len.clone();
+    let stub_prefix_c = stub_prefix.clone();
+    let hooks = Hooks::new().on_error(move |ctx| {
+        let stub_len_c = stub_len_c.clone();
+        let stub_prefix_c = stub_prefix_c.clone();
+        async move {
+            let body = ctx.response.as_ref().unwrap().bytes();
+            stub_len_c.store(body.len(), Ordering::SeqCst);
+            stub_prefix_c.store(body.starts_with(b"PREFIX"), Ordering::SeqCst);
+        }
+    });
+
+    let client = ClientBuilder::new()
+        .base_url(server.uri())?
+        .hooks(hooks)
+        .build()?;
+
+    let mut response = client.get("/peek-404").send_stream().await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let mut collected = BytesMut::new();
+    while let Some(chunk) = response.bytes_stream().next().await {
+        collected.extend_from_slice(&chunk?);
+    }
+    assert_eq!(collected.as_ref(), payload.as_slice());
+    assert_eq!(stub_len.load(Ordering::SeqCst), 64 * 1024);
+    assert!(stub_prefix.load(Ordering::SeqCst));
+    Ok(())
+}
+
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn custom_retry_no_retry_restores_body_on_stream() -> Result<()> {
