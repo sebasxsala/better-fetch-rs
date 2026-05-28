@@ -93,7 +93,7 @@ better-fetch **is** reqwest under the hood for the default backend; you can pass
 
 **Concurrency:** [`ClientBuilder::max_in_flight`](https://docs.rs/better-fetch/latest/better_fetch/struct.ClientBuilder.html#method.max_in_flight) limits concurrent requests (including retries) inside the client. With `feature = "tower"`, [`ConcurrencyLimitLayer`](https://docs.rs/better-fetch/latest/better_fetch/tower/stack/struct.ConcurrencyLimitLayer.html) caps the transport separately — avoid stacking both at the same numeric limit unless intentional. See [`examples/tower_vs_streaming.rs`](examples/tower_vs_streaming.rs).
 
-See [docs/testing.md](docs/testing.md) (testing), [docs/observability.md](docs/observability.md) (tracing / OTel / miette), and [docs/ROADMAP.md](docs/ROADMAP.md) (internal scope).
+See [docs/testing.md](docs/testing.md) (testing) and [docs/observability.md](docs/observability.md) (tracing / OTel / miette).
 
 ## Highlights
 
@@ -101,7 +101,7 @@ See [docs/testing.md](docs/testing.md) (testing), [docs/observability.md](docs/o
 - **Retries** — linear, exponential, or `count`; `Retry-After`, jitter, custom `should_retry`; default retry on 408/429/502/503/504.
 - **Hooks & plugins** — compose client and plugin hooks; optional `LoggerPlugin` (requires a `tracing` subscriber in your app).
 - **Errors** — `Result` + `?`; [`TransportKind`](https://docs.rs/better-fetch/latest/better_fetch/enum.TransportKind.html) on transport failures; `Error::api_json()` to parse JSON error bodies from APIs; `Error::hook()` from `on_request` / `on_response` hooks.
-- **Typed endpoints** — `Endpoint` trait + `client.call::<E>()` with typed `params`/`query` structs and `send_json()`.
+- **Typed endpoints** — `Endpoint` trait + `client.call::<E>()` with typed `params`/`query` structs and `send_json()` (path/body enforced by type-state when applicable; query typed but optional).
 - **Testing** — inject `ClientBuilder::backend(Arc<dyn HttpBackend>)`.
 - **Cancellation** — `CancellationToken` per request; cooperative abort during requests and retry backoff.
 - **Throw mode** — `throw_on_error(true)` makes `send()` return `Err` on non-2xx (like upstream `throw: true`).
@@ -131,7 +131,7 @@ See [docs/testing.md](docs/testing.md) (testing), [docs/observability.md](docs/o
 | Method | Description |
 |--------|-------------|
 | `.params(E::Params)` | Typed path parameters (required when `E::Params` is not `()`) |
-| `.query(E::Query)` | Typed query struct or `IndexMap<String, QueryValue>` |
+| `.query(E::Query)` | Typed query struct or `IndexMap<String, QueryValue>` (optional — call to attach query string) |
 | `.header` / `.bearer_token` / `.cancellation_token` / `.throw_on_error` | Same as `RequestBuilder` |
 | `.send` / `.send_json` | Execute; `send_json()` returns `E::Response` |
 
@@ -205,9 +205,20 @@ let err = client
 ### Typed endpoint
 
 Typed endpoints bind HTTP method, path template, and response type at compile time.
-Path and query parameters are typed via `E::Params` / `E::Query` structs — use
-[`.params()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.params)
-and [`.query()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.query).
+Path parameters use `E::Params` with [`.params()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.params);
+query parameters use `E::Query` with [`.query()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.query)
+when you want them on the wire.
+
+**What compile-time guarantees apply**
+
+| Part | Enforced before send? |
+|------|----------------------|
+| Path (`E::Params`) | Yes, when not `()` — type-state [`NeedsParams`](https://docs.rs/better-fetch/latest/better_fetch/struct.NeedsParams.html) |
+| Body (`E::Body` on POST, etc.) | Yes, when the `macros` endpoint marks a required body — [`NeedsBody`](https://docs.rs/better-fetch/latest/better_fetch/struct.NeedsBody.html) |
+| Query (`E::Query`) | **No** — typed, but [`.query()`](https://docs.rs/better-fetch/latest/better_fetch/struct.EndpointRequestBuilder.html#method.query) is optional; omit it to send no query string |
+| Response (`E::Response`) | Typed deserialization via `.send_json()` |
+
+`E::Query: Default` does **not** mean the library applies a default query on send — you must call `.query(...)?` to serialize `E::Query`. For required query params at runtime, use `schema-validate` strict or tests.
 
 ```rust
 use better_fetch::{Client, Endpoint, Result, define_params};

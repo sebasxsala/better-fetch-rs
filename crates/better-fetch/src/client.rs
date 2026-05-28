@@ -139,7 +139,8 @@ impl Client {
     ///
     /// When `E::Params` is not unit, returns a builder in [`NeedsParams`](crate::NeedsParams) state
     /// that requires [`.params()`](EndpointRequestBuilder::params) before
-    /// [`.send_json()`](EndpointRequestBuilder::send_json).
+    /// [`.send_json()`](EndpointRequestBuilder::send_json). Query (`E::Query`) is typed but not
+    /// enforced: call [`.query()`](EndpointRequestBuilder::query) when you need query parameters on the wire.
     ///
     /// For ad-hoc requests with string paths, use [`Self::get`] / [`Self::post`] instead.
     ///
