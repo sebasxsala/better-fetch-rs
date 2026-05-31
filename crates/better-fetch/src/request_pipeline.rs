@@ -91,6 +91,7 @@ pub(crate) struct PreparedExecution {
     /// Request used a streaming body (not replayable on retry).
     pub non_replayable_body: bool,
     /// Path template used for schema registry lookups.
+    #[cfg(feature = "schema-validate")]
     pub route_path: String,
     #[cfg(feature = "schema")]
     pub schema_registry: Option<std::sync::Arc<crate::schema::SchemaRegistry>>,
@@ -258,6 +259,7 @@ pub(crate) async fn prepare_execution(
         #[cfg(feature = "multipart")]
         multipart,
         non_replayable_body,
+        #[cfg(feature = "schema-validate")]
         route_path: builder.path.clone(),
         #[cfg(feature = "schema")]
         schema_registry: config.schema_registry.clone(),
