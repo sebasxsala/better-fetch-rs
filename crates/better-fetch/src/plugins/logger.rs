@@ -66,7 +66,7 @@ impl Plugin for LoggerPlugin {
                         );
                         let _guard = span.enter();
                         if verbose {
-                            info!("better-fetch request");
+                            info!(header_count = ctx.headers.len(), "better-fetch request");
                         } else {
                             info!("better-fetch request");
                         }
@@ -90,7 +90,10 @@ impl Plugin for LoggerPlugin {
                             );
                             let _guard = span.enter();
                             if verbose {
-                                info!("better-fetch stream response");
+                                info!(
+                                    header_count = ctx.headers.len(),
+                                    "better-fetch stream response"
+                                );
                             } else {
                                 info!("better-fetch stream response");
                             }
@@ -119,7 +122,10 @@ impl Plugin for LoggerPlugin {
                             );
                             let _guard = span.enter();
                             if verbose {
-                                info!("better-fetch response");
+                                info!(
+                                    header_count = ctx.response.headers().len(),
+                                    "better-fetch response"
+                                );
                             } else {
                                 info!("better-fetch response");
                             }
