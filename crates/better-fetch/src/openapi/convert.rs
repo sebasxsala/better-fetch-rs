@@ -53,7 +53,7 @@ impl SchemaCatalog {
         if self.schemas.contains_key(&name) {
             return;
         }
-        let cleaned = rewrite_schema_refs(strip_meta(schema));
+        let cleaned = nullable_rewrite(rewrite_schema_refs(strip_meta(schema)));
         self.schemas.insert(name, cleaned);
     }
 }
@@ -146,7 +146,7 @@ pub(crate) fn parameters_from_schema(
             continue;
         }
 
-        let inline = rewrite_schema_refs(prop_schema);
+        let inline = nullable_rewrite(rewrite_schema_refs(prop_schema));
         let schema = if let Some(ref_path) = inline_ref_to_component(
             &inline,
             catalog,
@@ -193,7 +193,7 @@ fn inline_ref_to_component(
         if !catalog.schemas.contains_key(&name) {
             catalog
                 .schemas
-                .insert(name.clone(), rewrite_schema_refs(schema.clone()));
+                .insert(name.clone(), nullable_rewrite(rewrite_schema_refs(schema.clone())));
         }
         return Some(format!("#/components/schemas/{name}"));
     }
@@ -233,6 +233,77 @@ fn rewrite_schema_refs(value: Value) -> Value {
         Value::Array(items) => Value::Array(items.into_iter().map(rewrite_schema_refs).collect()),
         other => other,
     }
+}
+
+fn is_null_variant(v: &Value) -> bool {
+    v.as_object()
+        .is_some_and(|o| o.len() == 1 && o.get("type").and_then(Value::as_str) == Some("null"))
+}
+
+/// Converts JSON Schema (draft-07) nullability into OpenAPI 3.0 `nullable: true`.
+///
+/// Handles both `"type": [..., "null"]` (option of primitive) and
+/// `"anyOf"`/`"oneOf"` variants containing `{"type": "null"}` (option of `$ref`/struct).
+fn nullable_rewrite(value: Value) -> Value {
+    let Value::Object(mut map) = value else {
+        return match value {
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(nullable_rewrite).collect())
+            }
+            other => other,
+        };
+    };
+
+    if let Some(Value::Array(types)) = map.get("type").cloned() {
+        if types.iter().any(|t| t == "null") {
+            let rest: Vec<Value> = types.into_iter().filter(|t| t != "null").collect();
+            match rest.len() {
+                0 => {
+                    map.remove("type");
+                }
+                1 => {
+                    map.insert("type".into(), rest.into_iter().next().unwrap());
+                }
+                _ => {
+                    map.insert("type".into(), Value::Array(rest));
+                }
+            }
+            map.insert("nullable".into(), Value::Bool(true));
+        }
+    }
+
+    for key in ["anyOf", "oneOf"] {
+        let Some(Value::Array(variants)) = map.get(key).cloned() else {
+            continue;
+        };
+        if !variants.iter().any(is_null_variant) {
+            continue;
+        }
+        let mut rest: Vec<Value> = variants.into_iter().filter(|v| !is_null_variant(v)).collect();
+        map.insert("nullable".into(), Value::Bool(true));
+        if rest.len() == 1 {
+            map.remove(key);
+            let only = rest.pop().unwrap();
+            if only.as_object().is_some_and(|o| o.contains_key("$ref")) {
+                // A `$ref` ignores sibling keywords in OpenAPI 3.0; wrap so `nullable` applies.
+                map.insert("allOf".into(), Value::Array(vec![only]));
+            } else if let Value::Object(inner) = only {
+                for (k, v) in inner {
+                    map.entry(k).or_insert(v);
+                }
+            }
+        } else {
+            map.insert(key.into(), Value::Array(rest));
+        }
+    }
+
+    let keys: Vec<String> = map.keys().cloned().collect();
+    for key in keys {
+        if let Some(v) = map.remove(&key) {
+            map.insert(key, nullable_rewrite(v));
+        }
+    }
+    Value::Object(map)
 }
 
 pub(crate) fn sanitize_component_name(name: &str) -> String {
@@ -308,5 +379,45 @@ mod tests {
             .unwrap();
         assert_eq!(ref_path, "#/components/schemas/Sample");
         assert!(catalog.schemas.contains_key("Sample"));
+    }
+
+    #[derive(JsonSchema)]
+    #[expect(dead_code)]
+    struct Inner {
+        a: u32,
+    }
+
+    #[derive(JsonSchema)]
+    #[expect(dead_code)]
+    struct Nullable {
+        name: Option<String>,
+        inner: Option<Inner>,
+        plain: String,
+    }
+
+    #[test]
+    fn option_fields_become_openapi_nullable() {
+        let mut catalog = SchemaCatalog::default();
+        catalog
+            .register("Nullable", &schemars::schema_for!(Nullable))
+            .unwrap();
+        let schema = &catalog.schemas["Nullable"];
+        let props = &schema["properties"];
+
+        // Option<primitive>: single type + nullable, no "null" in a type array.
+        assert_eq!(props["name"]["type"], serde_json::json!("string"));
+        assert_eq!(props["name"]["nullable"], serde_json::json!(true));
+
+        // Option<struct>: anyOf+null collapses to allOf+nullable (no null variant left).
+        assert_eq!(props["inner"]["nullable"], serde_json::json!(true));
+        assert!(props["inner"].get("anyOf").is_none());
+
+        // Non-optional field is untouched.
+        assert_eq!(props["plain"]["type"], serde_json::json!("string"));
+        assert!(props["plain"].get("nullable").is_none());
+
+        // No residual draft-07 null typing anywhere in the serialized component.
+        let dumped = serde_json::to_string(schema).unwrap();
+        assert!(!dumped.contains("\"null\""));
     }
 }

@@ -3,7 +3,7 @@
 use http::Method;
 use schemars::schema::RootSchema;
 use schemars::JsonSchema;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use crate::error::Error;
 use crate::Result;
@@ -30,7 +30,8 @@ pub struct EndpointSchema {
 pub struct SchemaRegistry {
     entries: Vec<EndpointSchema>,
     strict: bool,
-    routes: HashSet<String>,
+    /// `route_key` → index of the first registered entry (O(1) lookups).
+    index: HashMap<String, usize>,
 }
 
 impl Default for SchemaRegistry {
@@ -45,7 +46,7 @@ impl SchemaRegistry {
         Self {
             entries: Vec::new(),
             strict: false,
-            routes: HashSet::new(),
+            index: HashMap::new(),
         }
     }
 
@@ -68,10 +69,8 @@ impl SchemaRegistry {
         request_schema: Option<RootSchema>,
         response_schema: Option<RootSchema>,
     ) {
-        let path = path.into();
-        warn_duplicate_route(&mut self.routes, &path, &method);
-        self.entries.push(EndpointSchema {
-            path,
+        self.push_entry(EndpointSchema {
+            path: path.into(),
             method,
             request_schema,
             response_schema,
@@ -90,16 +89,29 @@ impl SchemaRegistry {
         query_schema: Option<RootSchema>,
         params_schema: Option<RootSchema>,
     ) {
-        let path = path.into();
-        warn_duplicate_route(&mut self.routes, &path, &method);
-        self.entries.push(EndpointSchema {
-            path,
+        self.push_entry(EndpointSchema {
+            path: path.into(),
             method,
             request_schema,
             response_schema,
             query_schema,
             params_schema,
         });
+    }
+
+    /// Appends an entry and indexes its route (keeping the first entry per route).
+    fn push_entry(&mut self, entry: EndpointSchema) {
+        let key = route_key(&entry.path, &entry.method);
+        if self.index.contains_key(&key) {
+            tracing::warn!(
+                path = %entry.path,
+                method = %entry.method,
+                "duplicate schema registration for route; lookups use the first matching entry"
+            );
+        }
+        let idx = self.entries.len();
+        self.index.entry(key).or_insert(idx);
+        self.entries.push(entry);
     }
 
     /// Registers schemas derived from [`Endpoint`](crate::Endpoint) and `JsonSchema` types.
@@ -126,8 +138,7 @@ impl SchemaRegistry {
         if !self.strict {
             return Ok(());
         }
-        let key = route_key(path, method);
-        if self.routes.contains(&key) {
+        if self.index.contains_key(&route_key(path, method)) {
             Ok(())
         } else {
             Err(Error::SchemaRoute {
@@ -142,54 +153,37 @@ impl SchemaRegistry {
         &self.entries
     }
 
+    /// Returns the first registered entry for a route, if any.
+    fn find(&self, path: &str, method: &Method) -> Option<&EndpointSchema> {
+        self.index
+            .get(&route_key(path, method))
+            .map(|&i| &self.entries[i])
+    }
+
     /// Returns the request body schema for a route, if registered.
     pub fn request_schema(&self, path: &str, method: &Method) -> Option<&RootSchema> {
-        let key = route_key(path, method);
-        self.entries
-            .iter()
-            .find(|e| route_key(&e.path, &e.method) == key)
+        self.find(path, method)
             .and_then(|e| e.request_schema.as_ref())
     }
 
     /// Returns the response body schema for a route, if registered.
     pub fn response_schema(&self, path: &str, method: &Method) -> Option<&RootSchema> {
-        let key = route_key(path, method);
-        self.entries
-            .iter()
-            .find(|e| route_key(&e.path, &e.method) == key)
+        self.find(path, method)
             .and_then(|e| e.response_schema.as_ref())
     }
 
     /// Returns the query string schema for a route, if registered.
     pub fn query_schema(&self, path: &str, method: &Method) -> Option<&RootSchema> {
-        let key = route_key(path, method);
-        self.entries
-            .iter()
-            .find(|e| route_key(&e.path, &e.method) == key)
-            .and_then(|e| e.query_schema.as_ref())
+        self.find(path, method).and_then(|e| e.query_schema.as_ref())
     }
 
     /// Returns the path-parameter schema for a route, if registered.
     pub fn params_schema(&self, path: &str, method: &Method) -> Option<&RootSchema> {
-        let key = route_key(path, method);
-        self.entries
-            .iter()
-            .find(|e| route_key(&e.path, &e.method) == key)
+        self.find(path, method)
             .and_then(|e| e.params_schema.as_ref())
     }
 }
 
 fn route_key(path: &str, method: &Method) -> String {
     format!("{method}:{path}")
-}
-
-fn warn_duplicate_route(routes: &mut HashSet<String>, path: &str, method: &Method) {
-    let key = route_key(path, method);
-    if !routes.insert(key) {
-        tracing::warn!(
-            path,
-            method = %method,
-            "duplicate schema registration for route; lookups use the first matching entry"
-        );
-    }
 }

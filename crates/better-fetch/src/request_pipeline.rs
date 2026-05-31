@@ -687,8 +687,8 @@ async fn run_http_loop(mut prep: PreparedExecution, mode: LoopMode) -> Result<Lo
                     Ok(http_res) => {
                         let response = retry_stub_response(
                             http_res.status,
-                            http_res.headers.clone(),
-                            Some(request_url.clone()),
+                            http_res.headers,
+                            Some(request_url),
                             http_res.body,
                             #[cfg(feature = "json")]
                             prep.json_parser.clone(),
