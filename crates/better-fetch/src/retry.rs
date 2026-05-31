@@ -172,13 +172,18 @@ impl RetryPolicy {
     }
 
     /// Computes sleep duration using policy backoff, optional [`Retry-After`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After), and jitter.
+    ///
+    /// A server-provided `Retry-After` is honored exactly (never reduced by jitter), since it is a
+    /// minimum delay the server mandated. Jitter only applies to the policy's own backoff.
     pub(crate) fn delay_after_response(&self, attempt: u32, headers: &HeaderMap) -> Duration {
+        if let Some(retry_after) = parse_retry_after(headers) {
+            return retry_after;
+        }
         let base = self.delay_before_attempt(attempt);
-        let delay = parse_retry_after(headers).unwrap_or(base);
         if self.uses_jitter() {
-            apply_jitter(delay)
+            apply_jitter(base)
         } else {
-            delay
+            base
         }
     }
 
@@ -234,11 +239,21 @@ pub fn default_should_retry(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
 }
 
-/// Parses `Retry-After` as a delay in seconds (integer values only).
+/// Parses `Retry-After` as a delay.
+///
+/// Supports both the integer `delay-seconds` form and the HTTP-date form
+/// (RFC 7231); a date in the past yields [`Duration::ZERO`].
 pub fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
-    let secs = value.trim().parse::<u64>().ok()?;
-    Some(Duration::from_secs(secs))
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    let when = httpdate::parse_http_date(value).ok()?;
+    Some(
+        when.duration_since(std::time::SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 fn apply_jitter(delay: Duration) -> Duration {
@@ -330,6 +345,32 @@ mod tests {
             policy.delay_after_response(0, &headers),
             Duration::from_secs(2)
         );
+    }
+
+    #[test]
+    fn retry_after_is_not_reduced_by_jitter() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "5".parse().unwrap());
+        let policy = RetryPolicy::exponential(3, Duration::from_secs(1), Duration::from_secs(30));
+        assert!(policy.uses_jitter());
+        for _ in 0..20 {
+            assert_eq!(
+                policy.delay_after_response(0, &headers),
+                Duration::from_secs(5)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_retry_after_future_http_date() {
+        let future = std::time::SystemTime::now() + Duration::from_secs(3600);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::RETRY_AFTER,
+            httpdate::fmt_http_date(future).parse().unwrap(),
+        );
+        let delay = parse_retry_after(&headers).expect("date delay");
+        assert!(delay > Duration::from_secs(3000) && delay <= Duration::from_secs(3600));
     }
 
     #[test]

@@ -100,12 +100,20 @@ async fn retry_after_503_with_stream_body_is_non_replayable() -> Result<()> {
 }
 
 #[test]
-fn parse_retry_after_rejects_http_date() {
+fn parse_retry_after_accepts_past_http_date_as_zero() {
     let mut headers = HeaderMap::new();
     headers.insert(
         http::header::RETRY_AFTER,
         "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
     );
+    // A past HTTP-date means "retry now".
+    assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(0)));
+}
+
+#[test]
+fn parse_retry_after_rejects_garbage() {
+    let mut headers = HeaderMap::new();
+    headers.insert(http::header::RETRY_AFTER, "not-a-date".parse().unwrap());
     assert!(parse_retry_after(&headers).is_none());
 }
 

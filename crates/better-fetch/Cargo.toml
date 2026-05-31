@@ -50,6 +50,7 @@ full = [
 tokio = { version = "1", features = ["time", "sync", "macros"] }
 tokio-util = { workspace = true }
 fastrand = { workspace = true }
+httpdate = "1"
 indexmap = { workspace = true }
 base64 = "0.22"
 thiserror = { workspace = true }
