@@ -164,26 +164,21 @@ pub fn parse_method_modifier(path: &str) -> (&str, Option<Method>) {
 }
 
 fn substitute_params(path: &str, params: &HashMap<String, String>) -> Result<String> {
-    let mut result = path.to_string();
-    for key in path_param_names(path) {
-        let placeholder = format!(":{key}");
-        let Some(value) = params.get(&key) else {
-            return Err(Error::MissingPathParam(key));
-        };
-        let encoded: Cow<'_, str> = utf8_percent_encode(value, PATH_PARAM_ENCODE).into();
-        result = result.replace(&placeholder, encoded.as_ref());
-    }
-
-    if result.contains(':') {
-        for segment in result.split('/') {
-            if segment.starts_with(':') {
-                let name = segment.trim_start_matches(':');
-                return Err(Error::MissingPathParam(name.to_string()));
+    // Substitute per `/`-segment so a parameter name that is a prefix of another
+    // (e.g. `:user` vs `:user_id`) cannot corrupt a later segment.
+    let mut segments: Vec<Cow<'_, str>> = Vec::new();
+    for segment in path.split('/') {
+        match segment.strip_prefix(':') {
+            Some(name) => {
+                let Some(value) = params.get(name) else {
+                    return Err(Error::MissingPathParam(name.to_string()));
+                };
+                segments.push(utf8_percent_encode(value, PATH_PARAM_ENCODE).into());
             }
+            None => segments.push(Cow::Borrowed(segment)),
         }
     }
-
-    Ok(result)
+    Ok(segments.join("/"))
 }
 
 fn join_path(base: &Url, path: &str) -> Result<Url> {
@@ -280,6 +275,24 @@ mod tests {
         params.insert("id".into(), "a/b".into());
         let built = build_url(&base(), "/items/:id", &params, &IndexMap::new()).unwrap();
         assert!(built.url.path().contains("a%2Fb"));
+    }
+
+    #[test]
+    fn param_name_prefix_of_another_does_not_collide() {
+        let mut params = HashMap::new();
+        params.insert("user".into(), "alice".into());
+        params.insert("user_id".into(), "42".into());
+        let built = build_url(&base(), "/u/:user/:user_id", &params, &IndexMap::new()).unwrap();
+        assert_eq!(built.url.as_str(), "https://api.example.com/u/alice/42");
+    }
+
+    #[test]
+    fn shorter_param_after_longer_does_not_collide() {
+        let mut params = HashMap::new();
+        params.insert("id".into(), "1".into());
+        params.insert("id_v2".into(), "2".into());
+        let built = build_url(&base(), "/x/:id_v2/:id", &params, &IndexMap::new()).unwrap();
+        assert_eq!(built.url.as_str(), "https://api.example.com/x/2/1");
     }
 
     #[test]
