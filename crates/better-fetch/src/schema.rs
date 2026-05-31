@@ -174,7 +174,8 @@ impl SchemaRegistry {
 
     /// Returns the query string schema for a route, if registered.
     pub fn query_schema(&self, path: &str, method: &Method) -> Option<&RootSchema> {
-        self.find(path, method).and_then(|e| e.query_schema.as_ref())
+        self.find(path, method)
+            .and_then(|e| e.query_schema.as_ref())
     }
 
     /// Returns the path-parameter schema for a route, if registered.

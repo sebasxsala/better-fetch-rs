@@ -191,9 +191,10 @@ fn inline_ref_to_component(
     if schema.is_object() && schema.as_object().is_some_and(|o| !o.is_empty()) {
         let name = sanitize_component_name(preferred_name);
         if !catalog.schemas.contains_key(&name) {
-            catalog
-                .schemas
-                .insert(name.clone(), nullable_rewrite(rewrite_schema_refs(schema.clone())));
+            catalog.schemas.insert(
+                name.clone(),
+                nullable_rewrite(rewrite_schema_refs(schema.clone())),
+            );
         }
         return Some(format!("#/components/schemas/{name}"));
     }
@@ -247,9 +248,7 @@ fn is_null_variant(v: &Value) -> bool {
 fn nullable_rewrite(value: Value) -> Value {
     let Value::Object(mut map) = value else {
         return match value {
-            Value::Array(items) => {
-                Value::Array(items.into_iter().map(nullable_rewrite).collect())
-            }
+            Value::Array(items) => Value::Array(items.into_iter().map(nullable_rewrite).collect()),
             other => other,
         };
     };
@@ -279,7 +278,10 @@ fn nullable_rewrite(value: Value) -> Value {
         if !variants.iter().any(is_null_variant) {
             continue;
         }
-        let mut rest: Vec<Value> = variants.into_iter().filter(|v| !is_null_variant(v)).collect();
+        let mut rest: Vec<Value> = variants
+            .into_iter()
+            .filter(|v| !is_null_variant(v))
+            .collect();
         map.insert("nullable".into(), Value::Bool(true));
         if rest.len() == 1 {
             map.remove(key);
