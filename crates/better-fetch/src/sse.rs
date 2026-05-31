@@ -24,10 +24,14 @@ pub struct SseEvent {
     pub id: Option<String>,
 }
 
-/// Incrementally parses SSE events from UTF-8 chunks (blocks delimited by `\n\n`).
+/// Incrementally parses SSE events from UTF-8 chunks (blocks delimited by a blank line).
+///
+/// Line terminators may be LF, CR, or CRLF (normalized to LF), including a CRLF split across chunks.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
     buffer: String,
+    /// Previous chunk ended with a lone `\r` that may pair with a leading `\n` of the next chunk.
+    pending_cr: bool,
 }
 
 impl SseDecoder {
@@ -40,12 +44,41 @@ impl SseDecoder {
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>> {
         let text = std::str::from_utf8(chunk)
             .map_err(|e| crate::Error::Config(format!("SSE chunk is not valid UTF-8: {e}")))?;
-        self.buffer.push_str(text);
+        self.push_normalized(text);
         Ok(self.drain_complete_events())
+    }
+
+    /// Appends `text` to the buffer, normalizing CR / CRLF line endings to LF.
+    fn push_normalized(&mut self, text: &str) {
+        let mut chars = text.chars().peekable();
+        if self.pending_cr {
+            self.pending_cr = false;
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            self.buffer.push('\n');
+        }
+        while let Some(c) = chars.next() {
+            if c == '\r' {
+                match chars.peek() {
+                    Some('\n') => {
+                        chars.next();
+                        self.buffer.push('\n');
+                    }
+                    Some(_) => self.buffer.push('\n'),
+                    None => self.pending_cr = true,
+                }
+            } else {
+                self.buffer.push(c);
+            }
+        }
     }
 
     /// Parses any trailing bytes as a final event block (if non-empty).
     pub fn finish(mut self) -> Vec<SseEvent> {
+        if self.pending_cr {
+            self.buffer.push('\n');
+        }
         let tail = std::mem::take(&mut self.buffer);
         if tail.trim().is_empty() {
             return Vec::new();
@@ -148,10 +181,11 @@ impl Stream for SseEventStream {
     }
 }
 
-/// Parses SSE events from a buffer (blocks separated by blank lines).
+/// Parses SSE events from a buffer (blocks separated by blank lines; LF, CR, or CRLF).
 pub fn parse_sse_events(buffer: &str) -> Vec<SseEvent> {
+    let normalized = buffer.replace("\r\n", "\n").replace('\r', "\n");
     let mut events = Vec::new();
-    for block in buffer.split("\n\n") {
+    for block in normalized.split("\n\n") {
         let block = block.trim();
         if block.is_empty() {
             continue;
@@ -161,6 +195,11 @@ pub fn parse_sse_events(buffer: &str) -> Vec<SseEvent> {
         }
     }
     events
+}
+
+/// Removes a single optional leading space after the field colon (per the SSE spec).
+fn strip_one_space(value: &str) -> &str {
+    value.strip_prefix(' ').unwrap_or(value)
 }
 
 fn parse_sse_block(block: &str) -> Option<SseEvent> {
@@ -173,11 +212,11 @@ fn parse_sse_block(block: &str) -> Option<SseEvent> {
             continue;
         }
         if let Some(rest) = line.strip_prefix("event:") {
-            event_name = Some(rest.trim().to_string());
+            event_name = Some(strip_one_space(rest).to_string());
         } else if let Some(rest) = line.strip_prefix("data:") {
-            data_lines.push(rest.trim_start().to_string());
+            data_lines.push(strip_one_space(rest).to_string());
         } else if let Some(rest) = line.strip_prefix("id:") {
-            id = Some(rest.trim().to_string());
+            id = Some(strip_one_space(rest).to_string());
         }
     }
 
@@ -230,5 +269,29 @@ mod tests {
         assert_eq!(second.len(), 2);
         assert_eq!(second[0].data, "hello");
         assert_eq!(second[1].data, "world");
+    }
+
+    #[test]
+    fn parses_crlf_delimited_events() {
+        let events = parse_sse_events("data: a\r\n\r\ndata: b\r\n\r\n");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].data, "a");
+        assert_eq!(events[1].data, "b");
+    }
+
+    #[test]
+    fn decoder_handles_crlf_split_across_chunks() {
+        let mut decoder = SseDecoder::new();
+        // Chunk ends mid-CRLF (lone `\r`); the next chunk supplies the `\n`.
+        assert!(decoder.push_chunk(b"data: hello\r").unwrap().is_empty());
+        let events = decoder.push_chunk(b"\n\r\n").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "hello");
+    }
+
+    #[test]
+    fn keeps_significant_leading_space_after_single_strip() {
+        let events = parse_sse_events("data:  two\n\n");
+        assert_eq!(events[0].data, " two");
     }
 }
