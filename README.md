@@ -438,8 +438,8 @@ cargo test -p better-fetch --features default,validate,tower,multipart,macros
 Push a semver tag matching `version` in the workspace `Cargo.toml`:
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 That runs [`.github/workflows/release.yml`](.github/workflows/release.yml): CI, crates.io trusted publishing (crates `better-fetch-macros`, `better-fetch`, `typed-fetch`, `api-fetch`), then a GitHub Release with the matching section from [CHANGELOG.md](CHANGELOG.md).

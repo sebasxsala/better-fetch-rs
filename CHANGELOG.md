@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-30
+
+### Added
+
+- **`LoggerPlugin` verbose tracing** — `header_count` field on request and response log events when verbose mode is enabled.
+
+### Fixed
+
+- **Path params** — substitute placeholders per `/`-segment so names that are prefixes of another (e.g. `:user` vs `:user_id`) no longer corrupt later segments.
+- **`Retry-After`** — honor server delays exactly (jitter no longer shortens them); parse HTTP-date values (RFC 7231) in addition to delay-seconds; past dates retry immediately.
+- **SSE** — normalize LF, CR, and CRLF line endings (including CRLF split across chunks); strip only one optional space after field colons per the SSE spec.
+- **OpenAPI export** (feature `openapi`) — `Option<T>` fields emit OpenAPI 3.0 `nullable: true` instead of draft-07 `"null"` typing.
+- **`schema-validate` builds** — `PreparedExecution::route_path` is compiled only when the feature is enabled.
+
+### Changed
+
+- **`SchemaRegistry`** — O(1) route lookups via an internal index (first registration still wins on duplicates).
+- **`request_pipeline`** — move headers and URL into retry stub responses instead of cloning.
+
 ## [0.6.0] - 2026-05-28
 
 ### Added
@@ -230,6 +249,7 @@ If you use strict JSON Schema validation and need to skip it for one call (e.g. 
 
 - Inspired by [@better-fetch/fetch](https://better-fetch.vercel.app/docs); independent Rust implementation, not affiliated with the upstream TypeScript project.
 
+[0.6.1]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.6.1
 [0.6.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/sebasxsala/better-fetch-rs/releases/tag/v0.4.0
